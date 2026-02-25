@@ -1,0 +1,13 @@
+[Unit]
+Description=Claudible TTS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claudible server
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
