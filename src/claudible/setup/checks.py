@@ -155,21 +155,10 @@ def check_input_group(auto_yes: bool = False) -> bool:
     if username in input_group.gr_mem or os.getgid() == input_group.gr_gid:
         return _pass(f"User '{username}' is in 'input' group")
 
-    if not _confirm(
-        f"User '{username}' not in 'input' group (needed for PTT). Run sudo usermod -aG?",
-        auto_yes,
-    ):
-        return _warn("Not in 'input' group — PTT may require root")
-
-    try:
-        subprocess.run(
-            ["sudo", "usermod", "-aG", "input", username],
-            check=True, capture_output=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        return _fail(f"Failed to add to input group: {e}")
-
-    return _pass(f"User '{username}' added to 'input' group (log out and back in to take effect)")
+    return _warn(
+        f"User '{username}' not in 'input' group (needed for PTT). Run:\n"
+        f"      sudo usermod -aG input {username}  # then log out and back in"
+    )
 
 
 def check_gpu() -> bool:
@@ -221,8 +210,18 @@ def check_ld_library_path() -> bool:
 
     # Find nvidia cudnn package path
     try:
-        import nvidia.cudnn  # noqa: F401
-        cudnn_path = Path(nvidia.cudnn.__file__).parent / "lib"
+        import nvidia.cudnn as _cudnn  # noqa: F401
+        # nvidia.cudnn may be a namespace package with __file__=None
+        if _cudnn.__file__:
+            cudnn_path = Path(_cudnn.__file__).parent / "lib"
+        else:
+            # Fall back to the package's loader path
+            import importlib.util
+            spec = importlib.util.find_spec("nvidia.cudnn")
+            if spec and spec.submodule_search_locations:
+                cudnn_path = Path(list(spec.submodule_search_locations)[0]) / "lib"
+            else:
+                return _pass("nvidia-cudnn installed but lib path not detected")
         if str(cudnn_path) in ld_path:
             return _pass("nvidia-cudnn in LD_LIBRARY_PATH")
         else:
