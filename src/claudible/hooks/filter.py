@@ -20,6 +20,7 @@ def extract_speakable(text: str) -> str | None:
     lines = text.split("\n")
     speakable: list[str] = []
     in_code_block = False
+    in_command_output = False
 
     for line in lines:
         stripped = line.strip()
@@ -27,10 +28,24 @@ def extract_speakable(text: str) -> str | None:
         # Toggle code fences
         if stripped.startswith("```"):
             in_code_block = not in_code_block
+            in_command_output = False
             continue
 
         # Skip everything inside code blocks
         if in_code_block:
+            continue
+
+        # Detect shell prompt lines and skip all following output until a blank line
+        if stripped.startswith(("$ ", "> ", "% ", ">>> ", "... ")):
+            in_command_output = True
+            continue
+
+        # A blank line ends command output context
+        if not stripped:
+            in_command_output = False
+            continue
+
+        if in_command_output:
             continue
 
         # Skip lines that look like output/technical noise
@@ -62,10 +77,6 @@ def extract_speakable(text: str) -> str | None:
 def _is_noise(line: str) -> bool:
     """Check if a line is technical noise that shouldn't be spoken."""
     if not line:
-        return True
-
-    # Command prompts and shell output
-    if line.startswith(("$ ", "> ", "% ", ">>> ", "... ")):
         return True
 
     # Markdown tables
