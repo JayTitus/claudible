@@ -202,30 +202,47 @@ def hooks_status() -> None:
 
 
 @main.command()
-def install() -> None:
-    """Interactive setup — installs hooks, creates default config."""
-    from claudible.config import Config
-    from claudible.hooks.installer import install_hook
-    from claudible.paths import ensure_dirs
+@click.option("--yes", "-y", is_flag=True, help="Non-interactive mode (auto-accept prompts)")
+@click.option("--skip-gpu", is_flag=True, help="Skip GPU/CUDA checks")
+def install(yes: bool, skip_gpu: bool) -> None:
+    """Full interactive setup — checks deps, installs hooks, downloads models."""
+    from claudible.setup.checks import run_all_checks
 
-    click.echo("Setting up claudible...")
-
-    # Create directories
-    ensure_dirs()
-    click.echo("  Created directories")
-
-    # Write default config if missing
-    cfg = Config.load()
-    cfg.save()
-    click.echo(f"  Config written to {cfg.save.__func__}")
-
-    # Install hook
-    install_hook()
-    click.echo("  Claude Code hook installed")
+    passed, total = run_all_checks(auto_yes=yes, skip_gpu=skip_gpu)
 
     click.echo()
-    click.echo("Next steps:")
-    click.echo("  1. Add a voice:    claudible voices add myvoice /path/to/sample.wav")
-    click.echo("  2. Start server:   claudible server")
-    click.echo("  3. Test it:        claudible speak 'Hello world'")
-    click.echo("  4. (Optional) PTT: claudible ptt")
+    if passed == total:
+        click.echo("Ready! Next steps:")
+        click.echo("  1. Start server:   claudible server")
+        click.echo("  2. Test it:        claudible speak 'Hello world'")
+        click.echo("  3. (Optional) PTT: claudible ptt")
+        click.echo("  4. (Optional) TUI: claudible tui")
+    else:
+        click.echo("Fix the failures above and re-run: claudible install")
+        sys.exit(1)
+
+
+@main.command()
+def tui() -> None:
+    """Launch the Textual configuration TUI."""
+    try:
+        from claudible.tui.app import ClaudibleApp  # noqa: F811
+    except ImportError:
+        click.echo("Textual not installed. Install with: pip install claudible[tui]", err=True)
+        sys.exit(1)
+
+    app = ClaudibleApp()
+    app.run()
+
+
+@main.command("config")
+def config_cmd() -> None:
+    """Open the configuration TUI (alias for 'tui')."""
+    try:
+        from claudible.tui.app import ClaudibleApp  # noqa: F811
+    except ImportError:
+        click.echo("Textual not installed. Install with: pip install claudible[tui]", err=True)
+        sys.exit(1)
+
+    app = ClaudibleApp()
+    app.run()

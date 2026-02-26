@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -94,6 +95,15 @@ async def speak(req: SpeakRequest):
     # Queue for sequential playback
     await _playback_queue.put((audio, sr))
     return SpeakResponse(ok=True, message=f"queued {len(text)} chars")
+
+
+@app.post("/shutdown")
+async def shutdown():
+    """Shut down the TTS server (localhost-only)."""
+    import signal
+
+    os.kill(os.getpid(), signal.SIGTERM)
+    return {"status": "shutting_down"}
 
 
 def run_server(host: str = "127.0.0.1", port: int = 5959):

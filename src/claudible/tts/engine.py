@@ -21,11 +21,18 @@ class TTSEngine:
 
     def load(self) -> None:
         """Load the TTS model onto GPU. Call once at server startup."""
+        import torch
         from TTS.api import TTS
 
-        log.info("Loading TTS model: %s", self._model_name)
-        self._tts = TTS(model_name=self._model_name, gpu=True)
-        log.info("TTS model loaded")
+        # Coqui TTS 0.22 checkpoints require weights_only=False (PyTorch >=2.6 default changed)
+        _orig_load = torch.load
+        torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": False})
+        try:
+            log.info("Loading TTS model: %s", self._model_name)
+            self._tts = TTS(model_name=self._model_name, gpu=True)
+            log.info("TTS model loaded")
+        finally:
+            torch.load = _orig_load
 
     @property
     def is_loaded(self) -> bool:

@@ -4,10 +4,11 @@ After=claudible-tts.service
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/claudible ptt
+ExecStart=%h/miniconda3/envs/claudible/bin/claudible ptt
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+Environment=COQUI_TOS_AGREED=1
 
 [Install]
 WantedBy=default.target
