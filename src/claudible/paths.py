@@ -9,6 +9,7 @@ CACHE_DIR = Path.home() / ".cache" / "claudible"
 VOICES_DIR = DATA_DIR / "voices"
 EMBEDDINGS_DIR = CACHE_DIR / "embeddings"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
+TTS_MUTE_FLAG = CACHE_DIR / "tts_muted"
 
 
 def ensure_dirs() -> None:

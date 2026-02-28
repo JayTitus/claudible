@@ -49,6 +49,11 @@ async def _process(text: str) -> None:
 
 def main() -> None:
     """Entry point for the stop hook."""
+    from claudible.paths import TTS_MUTE_FLAG
+
+    if TTS_MUTE_FLAG.exists():
+        return
+
     try:
         raw = sys.stdin.read()
         if not raw:

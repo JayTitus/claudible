@@ -36,11 +36,13 @@ src/claudible/
 - **Config**: TOML at ~/.config/claudible/config.toml
 - **Voices**: ~/.local/share/claudible/voices/ (each voice = subdir with .wav)
 
-## Install extras
-- `pip install -e .` — base (client, hooks, PTT)
-- `pip install -e ".[tts]"` — TTS server (GPU deps)
-- `pip install -e ".[tui]"` — Textual TUI
-- `pip install -e ".[dev]"` — dev tools
+## Install
+- `uv tool install ./claudible --python 3.11` — global install
+- `claudible install` — interactive setup (installs deps, daemon, hook)
+
+## Dev extras
+- `uv pip install -e ".[dev]"` — dev tools (pytest, ruff)
+- `uv pip install -e ".[tui]"` — Textual TUI
 
 ## Testing
 ```bash
@@ -50,14 +52,29 @@ pytest tests/
 ## CLI
 ```
 claudible                        # Status overview
-claudible server                 # Start TTS server
+claudible run                    # Start TTS server + tray icon
+claudible server                 # Start TTS server only
 claudible ptt                    # Push-to-talk listener
 claudible speak "text"           # Send text to TTS
 claudible voices list            # List voices
 claudible voices add NAME FILE   # Add voice from WAV
+claudible voices combine NAME FILES...  # Combine short clips into one sample
+claudible voices info NAME       # Show voice sample details
 claudible voices record NAME     # Record from mic
 claudible voices test NAME       # Test a voice
+claudible personas list          # List all personas (built-in + custom)
+claudible personas show NAME     # Show persona prompt
+claudible personas create NAME   # Create custom persona (opens editor)
+claudible personas delete NAME   # Delete custom persona
 claudible hooks install          # Install Claude Code hook
 claudible hooks uninstall        # Remove hook
+claudible daemon install         # Install systemd user service
+claudible daemon start/stop      # Start/stop daemon
+claudible daemon status/logs     # Check daemon status/logs
 claudible install                # Full interactive setup
 ```
+
+## Personas
+- Built-in: default, jarvis, casual, terse, mission-control, noir, butler, pirate, drill-sergeant
+- Custom: ~/.config/claudible/personas/*.txt (plain text system prompts)
+- Set active persona in config.toml: `[rephrase] persona = "noir"`

@@ -8,68 +8,81 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-HOOKS_DIR = Path.home() / ".claude"
-HOOKS_FILE = HOOKS_DIR / "hooks.json"
+SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 
-HOOK_ENTRY = {
-    "type": "stop",
-    "command": "python -m claudible.hooks.stop_hook",
-    "description": "Claudible TTS — speaks Claude's responses",
+def _hook_command() -> str:
+    """Build the hook command using the current Python interpreter."""
+    import sys
+    return f"{sys.executable} -m claudible.hooks.stop_hook"
+
+
+HOOK_ENTRY_TEMPLATE = {
+    "type": "command",
 }
 
 
 def install_hook() -> bool:
-    """Add the claudible stop hook to Claude Code's hooks.json."""
-    HOOKS_DIR.mkdir(parents=True, exist_ok=True)
+    """Add the claudible stop hook to Claude Code's settings.json."""
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    hooks = _load_hooks()
-    stop_hooks = hooks.setdefault("hooks", {}).setdefault("stop", [])
+    settings = _load_settings()
+    hooks = settings.setdefault("hooks", {})
+    stop_list = hooks.setdefault("Stop", [])
 
     # Check if already installed
-    for h in stop_hooks:
-        if "claudible" in h.get("command", ""):
-            log.info("Claudible hook already installed")
-            return True
+    for entry in stop_list:
+        for h in entry.get("hooks", []):
+            if "claudible" in h.get("command", ""):
+                log.info("Claudible hook already installed")
+                return True
 
-    stop_hooks.append(HOOK_ENTRY)
-    _save_hooks(hooks)
+    entry = {**HOOK_ENTRY_TEMPLATE, "command": _hook_command()}
+    stop_list.append({
+        "matcher": "",
+        "hooks": [entry],
+    })
+    _save_settings(settings)
     log.info("Claudible stop hook installed")
     return True
 
 
 def uninstall_hook() -> bool:
-    """Remove the claudible stop hook from Claude Code's hooks.json."""
-    if not HOOKS_FILE.exists():
+    """Remove the claudible stop hook from Claude Code's settings.json."""
+    if not SETTINGS_FILE.exists():
         return True
 
-    hooks = _load_hooks()
-    stop_hooks = hooks.get("hooks", {}).get("stop", [])
-    original_len = len(stop_hooks)
+    settings = _load_settings()
+    stop_list = settings.get("hooks", {}).get("Stop", [])
+    original_len = len(stop_list)
 
-    stop_hooks[:] = [h for h in stop_hooks if "claudible" not in h.get("command", "")]
+    stop_list[:] = [
+        entry for entry in stop_list
+        if not any("claudible" in h.get("command", "") for h in entry.get("hooks", []))
+    ]
 
-    if len(stop_hooks) < original_len:
-        _save_hooks(hooks)
+    if len(stop_list) < original_len:
+        _save_settings(settings)
         log.info("Claudible stop hook removed")
     return True
 
 
 def is_installed() -> bool:
     """Check if the claudible hook is installed."""
-    if not HOOKS_FILE.exists():
+    if not SETTINGS_FILE.exists():
         return False
-    hooks = _load_hooks()
-    for h in hooks.get("hooks", {}).get("stop", []):
-        if "claudible" in h.get("command", ""):
-            return True
+    settings = _load_settings()
+    for entry in settings.get("hooks", {}).get("Stop", []):
+        for h in entry.get("hooks", []):
+            if "claudible" in h.get("command", ""):
+                return True
     return False
 
 
-def _load_hooks() -> dict:
-    if HOOKS_FILE.exists():
-        return json.loads(HOOKS_FILE.read_text())
+def _load_settings() -> dict:
+    if SETTINGS_FILE.exists():
+        return json.loads(SETTINGS_FILE.read_text())
     return {}
 
 
-def _save_hooks(hooks: dict) -> None:
-    HOOKS_FILE.write_text(json.dumps(hooks, indent=2) + "\n")
+def _save_settings(settings: dict) -> None:
+    SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")

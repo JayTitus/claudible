@@ -52,9 +52,10 @@ def extract_speakable(text: str) -> str | None:
         if _is_noise(stripped):
             continue
 
-        # Keep this line
-        if stripped:
-            speakable.append(stripped)
+        # Strip inline code/paths from otherwise conversational lines
+        cleaned = _clean_line(stripped)
+        if cleaned:
+            speakable.append(cleaned)
 
     if not speakable:
         return None
@@ -89,8 +90,12 @@ def _is_noise(line: str) -> bool:
     if re.match(r"^[-=*]{3,}$", line):
         return True
 
-    # File paths standing alone (like listings)
-    if re.match(r"^[/~.][\w/.=-]+$", line):
+    # File paths standing alone — with globs, tildes, dots, wildcards
+    if re.match(r"^[/~.][\w/.=*?{}\[\]~-]+$", line):
+        return True
+
+    # Lines that are entirely a path/glob (possibly with backticks)
+    if re.match(r"^`?[/~.][\w/.=*?{}\[\]~-]+`?$", line):
         return True
 
     # Git hashes, SHAs
@@ -109,13 +114,45 @@ def _is_noise(line: str) -> bool:
     if re.match(r"^`[^`]+`$", line):
         return True
 
+    # Lines that are just a CLI command
+    if re.match(r"^(claudible|pip|uv|git|npm|cargo|make|docker|kubectl|systemctl|journalctl)\s", line):
+        return True
+
+    # Lines that are just key=value or config entries
+    if re.match(r"^\w+\s*=\s*\S+$", line):
+        return True
+
     return False
+
+
+_INLINE_CODE_RE = re.compile(r"`[^`]+`")
+_PATH_RE = re.compile(r"[/~][\w/.=*?{}\[\]~-]{5,}")
+_FLAG_RE = re.compile(r"\s--?\w[\w-]*")
+
+
+def _clean_line(line: str) -> str:
+    """Remove inline code spans, file paths, and CLI flags from a line."""
+    # Strip inline code backticks (replace with empty or a placeholder)
+    cleaned = _INLINE_CODE_RE.sub("", line)
+    # Strip bare file paths embedded in prose
+    cleaned = _PATH_RE.sub("", cleaned)
+    # Strip CLI flags
+    cleaned = _FLAG_RE.sub("", cleaned)
+    # Collapse whitespace
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    # Strip leading markdown bullets/numbers after cleaning
+    cleaned = re.sub(r"^[-*]\s*$", "", cleaned)
+    cleaned = re.sub(r"^\d+\.\s*$", "", cleaned)
+    return cleaned.strip()
 
 
 def _is_technical_token(word: str) -> bool:
     """Check if a word looks like a technical token (path, hash, flag, etc.)."""
     # File paths
     if "/" in word and len(word) > 5:
+        return True
+    # Glob patterns
+    if "*" in word or "?" in word:
         return True
     # CLI flags
     if word.startswith("--") or (word.startswith("-") and len(word) == 2):
