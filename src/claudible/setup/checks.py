@@ -13,7 +13,6 @@ from urllib.request import urlretrieve
 
 import click
 
-
 # --- Helpers ---
 
 def _confirm(prompt: str, auto_yes: bool) -> bool:
@@ -22,6 +21,110 @@ def _confirm(prompt: str, auto_yes: bool) -> bool:
         click.echo(f"  {prompt} (auto-yes)")
         return True
     return click.confirm(f"  {prompt}", default=True)
+
+
+def _pip_install(*packages: str) -> bool:
+    """Install packages into the current Python environment (prefers uv, falls back to pip)."""
+    uv = shutil.which("uv")
+    if uv:
+        result = subprocess.run(
+            [uv, "pip", "install", "--python", sys.executable, *packages],
+            capture_output=True,
+            text=True,
+        )
+    else:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", *packages],
+            capture_output=True,
+            text=True,
+        )
+    if result.returncode != 0:
+        click.echo(click.style(f"      install error: {result.stderr.strip()[-200:]}", fg="red"))
+    return result.returncode == 0
+
+
+def _apt_install(*packages: str) -> bool:
+    """Install system packages via apt, returns True on success."""
+    # Check which are already installed
+    missing = []
+    for pkg in packages:
+        result = subprocess.run(
+            ["dpkg", "-s", pkg], capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            missing.append(pkg)
+
+    if not missing:
+        return True
+
+    click.echo(f"  [..] Installing system packages: {', '.join(missing)}")
+    result = subprocess.run(
+        ["sudo", "apt", "install", "-y"] + missing,
+    )
+    return result.returncode == 0
+
+
+# All system (apt) packages needed for a full claudible install
+SYSTEM_DEPS = [
+    "libgirepository-2.0-dev",  # PyGObject build dep
+    "libgirepository1.0-dev",   # PyGObject build dep (compat)
+    "libcairo2-dev",            # PyGObject build dep
+    "gir1.2-ayatanaappindicator3-0.1",  # System tray on KDE/GNOME
+    "xdotool",                  # nerd-dictation types into focused window (X11)
+]
+
+# Python packages to verify/fix — these are also in pyproject.toml dependencies,
+# but we check explicitly because version pins can be overridden by transitive deps.
+PYTHON_DEPS = [
+    "transformers==4.44.2",  # Coqui TTS needs <=4.44 (TTS may pull newer)
+    "torchcodec",            # torchaudio runtime dep
+    "vosk",                  # nerd-dictation STT backend
+    "PyGObject",             # pystray AppIndicator backend
+]
+
+
+def check_system_deps() -> bool:
+    """Install all required system (apt) packages in one sudo call."""
+    return _apt_install(*SYSTEM_DEPS) and _pass("System packages installed")
+
+
+def check_python_deps() -> bool:
+    """Install all required Python packages in one call."""
+    # Check what's already satisfied
+    missing = []
+    for dep in PYTHON_DEPS:
+        pkg_name = dep.split("==")[0].split(">=")[0].split("<=")[0]
+        version_pin = dep.split("==")[1] if "==" in dep else None
+
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "show", pkg_name],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            missing.append(dep)
+        elif version_pin:
+            # Check version matches pin
+            for line in result.stdout.splitlines():
+                if line.startswith("Version:"):
+                    installed = line.split(":", 1)[1].strip()
+                    if installed != version_pin:
+                        missing.append(dep)
+                    break
+
+    if not missing:
+        return _pass("Python dependencies satisfied")
+
+    click.echo(f"  [..] Installing: {', '.join(missing)}")
+
+    # Clear uv build cache for PyGObject if system deps were just installed
+    # (stale cache can cause build failures)
+    uv = shutil.which("uv")
+    if uv and any("PyGObject" in d for d in missing):
+        subprocess.run([uv, "cache", "clean", "pygobject"], capture_output=True)
+
+    if _pip_install(*missing):
+        return _pass("Python dependencies installed")
+    return _warn(f"Failed to install: {', '.join(missing)}")
 
 
 def _pass(msg: str) -> bool:
@@ -106,24 +209,117 @@ def check_nerd_dictation(auto_yes: bool = False) -> bool:
     return _pass(f"nerd-dictation cloned and symlinked to {local_bin}")
 
 
+VOSK_MODELS = [
+    {
+        "name": "large",
+        "label": "Large — best accuracy (recommended)",
+        "zip": "vosk-model-en-us-0.22",
+        "url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
+        "size": "1.8 GB",
+        "wer": "5.69%",
+        "ram": "~2 GB",
+        "note": "Best recognition. Needs 2+ GB RAM. GPU not required (CPU-only).",
+    },
+    {
+        "name": "medium",
+        "label": "Medium — good balance",
+        "zip": "vosk-model-en-us-0.22-lgraph",
+        "url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
+        "size": "128 MB",
+        "wer": "7.82%",
+        "ram": "~400 MB",
+        "note": "Good accuracy, small footprint.",
+    },
+    {
+        "name": "small",
+        "label": "Small — lightweight",
+        "zip": "vosk-model-small-en-us-0.15",
+        "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+        "size": "40 MB",
+        "wer": "9.85%",
+        "ram": "~100 MB",
+        "note": "Lowest accuracy. Best for low-end hardware / Raspberry Pi.",
+    },
+]
+
+
+def _get_gpu_info() -> str:
+    """Detect GPU and return a summary string."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            vram = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+            return f"{name} ({vram:.0f} GB VRAM)"
+    except Exception:
+        pass
+    return "not detected"
+
+
+def _get_ram_gb() -> float:
+    """Get total system RAM in GB."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    return kb / (1024**2)
+    except Exception:
+        pass
+    return 0.0
+
+
 def check_vosk_model(auto_yes: bool = False) -> bool:
-    """Detect or download VOSK small English model."""
+    """Detect or download a VOSK English model with quality selection."""
     vosk_dir = Path.home() / ".local" / "share" / "vosk"
-    model_dir = vosk_dir / "small"
+
+    # Check for any existing model
+    from claudible.config import Config
+    cfg = Config.load()
+    model_name = cfg.stt.vosk_model
+    model_dir = vosk_dir / model_name
 
     if model_dir.exists() and any(model_dir.iterdir()):
+        # Show which model and its quality
+        for m in VOSK_MODELS:
+            if m["name"] == model_name:
+                return _pass(f"VOSK model '{model_name}' installed (WER {m['wer']}, {m['size']})")
         return _pass(f"VOSK model found at {model_dir}")
 
-    if not _confirm("VOSK model not found. Download vosk-model-small-en-us-0.15?", auto_yes):
-        return _warn("VOSK model not installed — STT will not work")
+    # Show hardware info to help user choose
+    gpu_info = _get_gpu_info()
+    ram_gb = _get_ram_gb()
+    click.echo(f"  Hardware: GPU={gpu_info}, RAM={ram_gb:.0f} GB")
+    click.echo()
+    click.echo("  Available VOSK speech recognition models:")
+    click.echo()
 
-    url = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
-    zip_path = vosk_dir / "vosk-model-small-en-us-0.15.zip"
+    for i, m in enumerate(VOSK_MODELS, 1):
+        default = " (default)" if i == 1 else ""
+        click.echo(f"    {i}. {m['label']}{default}")
+        click.echo(f"       Download: {m['size']}  |  Word error rate: {m['wer']}  |  RAM: {m['ram']}")
+        click.echo(f"       {m['note']}")
+        click.echo()
+
+    if auto_yes:
+        choice_idx = 0  # large
+    else:
+        choice = click.prompt(
+            "  Choose model",
+            type=click.IntRange(1, len(VOSK_MODELS)),
+            default=1,
+        )
+        choice_idx = choice - 1
+
+    model = VOSK_MODELS[choice_idx]
+    model_dir = vosk_dir / model["name"]
+
+    click.echo(f"    Downloading {model['label']} ({model['size']})...")
     vosk_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = vosk_dir / f"{model['zip']}.zip"
 
-    click.echo(f"    Downloading {url} ...")
     try:
-        urlretrieve(url, zip_path)
+        urlretrieve(model["url"], zip_path)
     except Exception as e:
         return _fail(f"Download failed: {e}")
 
@@ -131,8 +327,7 @@ def check_vosk_model(auto_yes: bool = False) -> bool:
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(vosk_dir)
-        # The zip extracts as vosk-model-small-en-us-0.15/ — rename to small/
-        extracted = vosk_dir / "vosk-model-small-en-us-0.15"
+        extracted = vosk_dir / model["zip"]
         if extracted.exists():
             if model_dir.exists():
                 shutil.rmtree(model_dir)
@@ -141,7 +336,11 @@ def check_vosk_model(auto_yes: bool = False) -> bool:
     except Exception as e:
         return _fail(f"Extraction failed: {e}")
 
-    return _pass(f"VOSK model installed at {model_dir}")
+    # Update config with chosen model name
+    cfg.stt.vosk_model = model["name"]
+    cfg.save()
+
+    return _pass(f"VOSK model '{model['name']}' installed (WER {m['wer']}, {m['size']})")
 
 
 def check_input_group(auto_yes: bool = False) -> bool:
@@ -155,10 +354,37 @@ def check_input_group(auto_yes: bool = False) -> bool:
     if username in input_group.gr_mem or os.getgid() == input_group.gr_gid:
         return _pass(f"User '{username}' is in 'input' group")
 
+    if auto_yes or _confirm(
+        f"User '{username}' not in 'input' group (needed for PTT). Add now (requires sudo)?",
+        auto_yes,
+    ):
+        import subprocess
+
+        result = subprocess.run(
+            ["sudo", "usermod", "-aG", "input", username],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return _pass(f"User '{username}' added to 'input' group (log out and back in to activate)")
+        else:
+            return _warn(
+                f"Failed to add user to 'input' group. Run manually:\n"
+                f"      sudo usermod -aG input {username}  # then log out and back in"
+            )
+
     return _warn(
         f"User '{username}' not in 'input' group (needed for PTT). Run:\n"
         f"      sudo usermod -aG input {username}  # then log out and back in"
     )
+
+
+def check_vosk_pip() -> bool:
+    """Verify vosk Python package is installed."""
+    try:
+        import vosk  # noqa: F401
+        return _pass("vosk Python package installed")
+    except ImportError:
+        return _warn("vosk not installed — STT will not work")
 
 
 def check_gpu() -> bool:
@@ -175,32 +401,33 @@ def check_gpu() -> bool:
 
 
 def check_transformers_version() -> bool:
-    """Warn if transformers version is too new for Coqui TTS."""
-    try:
-        import transformers
-        version = transformers.__version__
-        major, minor = (int(x) for x in version.split(".")[:2])
-        if major > 4 or (major == 4 and minor > 44):
-            return _warn(
-                f"transformers=={version} — Coqui TTS needs <=4.44.2 "
-                "(pip install transformers==4.44.2)"
-            )
-        return _pass(f"transformers=={version} (compatible)")
-    except ImportError:
-        return _warn("transformers not installed — install with [tts] extra")
+    """Verify transformers is the right version (installed by earlier check)."""
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "show", "transformers"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return _warn("transformers not installed")
+    for line in result.stdout.splitlines():
+        if line.startswith("Version:"):
+            version = line.split(":", 1)[1].strip()
+            major, minor = (int(x) for x in version.split(".")[:2])
+            if major > 4 or (major == 4 and minor > 44):
+                return _warn(f"transformers=={version} — needs <=4.44.2")
+            return _pass(f"transformers=={version} (compatible)")
+    return _warn("transformers version unknown")
 
 
 def check_torchcodec() -> bool:
-    """Warn if torchcodec is missing when torchaudio is installed."""
+    """Verify torchcodec is installed if torchaudio needs it."""
     try:
-        import torchaudio
+        import torchaudio  # noqa: F401
         try:
             import torchcodec  # noqa: F401
             return _pass("torchcodec installed")
         except ImportError:
-            return _warn("torchaudio installed but torchcodec missing (pip install torchcodec)")
+            return _warn("torchcodec missing")
     except ImportError:
-        # torchaudio not installed, no concern
         return _pass("torchaudio not installed — torchcodec not needed")
 
 
@@ -225,12 +452,70 @@ def check_ld_library_path() -> bool:
         if str(cudnn_path) in ld_path:
             return _pass("nvidia-cudnn in LD_LIBRARY_PATH")
         else:
-            return _warn(
-                f"nvidia-cudnn lib not in LD_LIBRARY_PATH. Add:\n"
-                f"      export LD_LIBRARY_PATH={cudnn_path}:$LD_LIBRARY_PATH"
-            )
+            # Auto-fix: set it for this process and note the daemon handles it
+            os.environ["LD_LIBRARY_PATH"] = f"{cudnn_path}:{ld_path}" if ld_path else str(cudnn_path)
+            return _pass(f"nvidia-cudnn added to LD_LIBRARY_PATH ({cudnn_path})")
     except ImportError:
         return _pass("nvidia-cudnn not installed (not needed if using system cuDNN)")
+
+
+def check_appindicator() -> bool:
+    """Verify PyGObject + AppIndicator are working (deps installed by earlier checks)."""
+    # Ensure system typelibs are visible
+    sys_typelib = "/usr/lib/x86_64-linux-gnu/girepository-1.0"
+    if os.path.isdir(sys_typelib):
+        existing = os.environ.get("GI_TYPELIB_PATH", "")
+        if sys_typelib not in existing:
+            os.environ["GI_TYPELIB_PATH"] = f"{sys_typelib}:{existing}" if existing else sys_typelib
+
+    try:
+        import gi
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import AyatanaAppIndicator3  # noqa: F401
+        return _pass("AppIndicator support (PyGObject + AyatanaAppIndicator3)")
+    except ImportError:
+        return _warn("PyGObject not installed — run claudible install again")
+    except ValueError:
+        return _warn("AyatanaAppIndicator3 typelib not found")
+
+
+def check_gui_deps() -> bool:
+    """Check if pystray and Pillow are installed."""
+    missing = []
+    try:
+        import pystray  # noqa: F401
+    except ImportError:
+        missing.append("pystray")
+    except (ValueError, Exception) as exc:
+        # pystray import can fail if GTK typelibs are missing
+        return _warn(f"pystray installed but GTK backend failed: {exc}")
+    try:
+        from PIL import Image  # noqa: F401
+    except ImportError:
+        missing.append("Pillow")
+
+    if missing:
+        deps = ", ".join(missing)
+        return _warn(f"GUI deps missing: {deps}")
+    return _pass("GUI deps installed (pystray, Pillow)")
+
+
+def check_rnnoise(auto_yes: bool = False) -> bool:
+    """Detect RNNoise LADSPA plugin, offer to build/install if missing."""
+    from claudible.stt.noise import install_rnnoise, is_rnnoise_installed
+
+    if is_rnnoise_installed():
+        return _pass("RNNoise LADSPA plugin installed")
+
+    click.echo(click.style(
+        "  [!!] RNNoise LADSPA plugin not found — noise suppression unavailable",
+        fg="yellow",
+    ))
+    if _confirm("Build and install RNNoise from source?", auto_yes):
+        if install_rnnoise(auto_yes=True):
+            return _pass("RNNoise LADSPA plugin built and installed")
+        return _fail("RNNoise build failed")
+    return _warn("RNNoise not installed — noise suppression will not work")
 
 
 def check_voices(auto_yes: bool = False) -> bool:
@@ -268,13 +553,22 @@ def run_all_checks(auto_yes: bool = False, skip_gpu: bool = False) -> tuple[int,
 
     results = []
 
-    # Always run these
+    # Phase 1: Install all dependencies upfront (one sudo, one pip call)
+    click.echo(click.style("  --- Installing dependencies ---", bold=True))
+    results.append(("System packages", check_system_deps()))
+    results.append(("Python packages", check_python_deps()))
+    click.echo()
+
+    # Phase 2: Verify everything works
+    click.echo(click.style("  --- Verifying setup ---", bold=True))
     results.append(("Directories", check_dirs()))
     results.append(("Config", check_config()))
     results.append(("Claude Code hook", check_hook()))
     results.append(("nerd-dictation", check_nerd_dictation(auto_yes)))
     results.append(("VOSK model", check_vosk_model(auto_yes)))
+    results.append(("vosk package", check_vosk_pip()))
     results.append(("input group", check_input_group(auto_yes)))
+    results.append(("RNNoise", check_rnnoise(auto_yes)))
 
     if not skip_gpu:
         results.append(("GPU/CUDA", check_gpu()))
@@ -282,6 +576,8 @@ def run_all_checks(auto_yes: bool = False, skip_gpu: bool = False) -> tuple[int,
         results.append(("torchcodec", check_torchcodec()))
         results.append(("LD_LIBRARY_PATH", check_ld_library_path()))
 
+    results.append(("AppIndicator", check_appindicator()))
+    results.append(("GUI deps", check_gui_deps()))
     results.append(("Voices", check_voices(auto_yes)))
 
     passed = sum(1 for _, ok in results if ok)

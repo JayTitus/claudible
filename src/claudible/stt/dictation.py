@@ -3,12 +3,38 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import site
 import subprocess
+import sys
 
 from claudible.config import Config
 
 log = logging.getLogger(__name__)
+
+
+def _build_pythonpath() -> str:
+    """Build a PYTHONPATH that lets nerd-dictation find vosk from our venv.
+
+    nerd-dictation uses ``#!/usr/bin/env python3`` which may resolve to a
+    system Python that doesn't have vosk.  We export our site-packages so
+    the subprocess can ``import vosk`` regardless of which interpreter runs.
+    """
+    paths: list[str] = []
+    # Add our venv's site-packages directories
+    for p in site.getsitepackages():
+        if p not in paths:
+            paths.append(p)
+    # Also include the user site if relevant
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str) and user_site not in paths:
+        paths.append(user_site)
+
+    existing = os.environ.get("PYTHONPATH", "")
+    if existing:
+        paths.append(existing)
+    return os.pathsep.join(paths)
 
 
 class Dictation:
@@ -18,6 +44,7 @@ class Dictation:
         cfg = config or Config.load()
         self._bin = cfg.stt.nerd_dictation_path
         self._model = cfg.stt.vosk_model
+        self._noise_suppression = cfg.stt.noise_suppression
         self._process: subprocess.Popen | None = None
 
     @property
@@ -41,9 +68,35 @@ class Dictation:
                 "Install it: https://github.com/ideasman42/nerd-dictation"
             )
 
-        cmd = [self._bin, "begin", "--vosk-model-dir", self._model_path]
+        model_dir = self._model_path
+        cmd = [self._bin, "begin", "--vosk-model-dir", model_dir]
+
+        # Use RNNoise-filtered virtual mic when noise suppression is on
+        if self._noise_suppression:
+            cmd.extend(["--pulse-device-name", "effect_output.rnnoise"])
+            log.info("Noise suppression enabled — using RNNoise virtual source")
+
         log.info("Starting nerd-dictation: %s", " ".join(cmd))
-        self._process = subprocess.Popen(cmd)
+
+        # Pass our site-packages via PYTHONPATH so nerd-dictation can find vosk
+        env = os.environ.copy()
+        env["PYTHONPATH"] = _build_pythonpath()
+
+        self._process = subprocess.Popen(
+            cmd,
+            env=env,
+            stderr=subprocess.PIPE,
+        )
+        # Check if it died immediately (e.g. missing model)
+        try:
+            self._process.wait(timeout=1.0)
+            # If we get here, the process exited already
+            stderr = self._process.stderr.read().decode(errors="replace").strip() if self._process.stderr else ""
+            log.error("nerd-dictation exited immediately (code %d): %s", self._process.returncode, stderr)
+            self._process = None
+        except subprocess.TimeoutExpired:
+            # Still running — good
+            pass
 
     def stop(self) -> None:
         """Stop nerd-dictation."""

@@ -24,18 +24,34 @@ class TTSConfig(BaseModel):
     voice: str = "default"
     language: str = "en"
     speed: float = 1.0
+    voices_dir: str = ""  # empty = default VOICES_DIR
 
 
 class STTConfig(BaseModel):
     nerd_dictation_path: str = "nerd-dictation"
     vosk_model: str = "small"
-    push_to_talk_key: str = "KEY_SCROLLLOCK"
+    push_to_talk_key: str = "KEY_RIGHTCTRL"
     hold_mode: bool = True
+    toggle_key: str = "KEY_SCROLLLOCK"
+    noise_suppression: bool = False
+
+
+class DictationConfig(BaseModel):
+    """Voice keyword → keystroke mappings for nerd-dictation."""
+
+    keywords: dict[str, str] = Field(default_factory=lambda: {
+        "submit": "Return",
+        "enter": "Return",
+        "backspace": "BackSpace",
+        "tab": "Tab",
+        "escape": "Escape",
+    })
 
 
 class RephraseConfig(BaseModel):
     enabled: bool = False
-    ollama_url: str = "http://localhost:11434"
+    api_url: str = "http://localhost:11434/v1"
+    api_key: str = ""  # optional — needed for Open WebUI or hosted providers
     model: str = "llama3.2:3b"
     persona: str = "default"
 
@@ -43,6 +59,7 @@ class RephraseConfig(BaseModel):
 class Config(BaseModel):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
+    dictation: DictationConfig = Field(default_factory=DictationConfig)
     rephrase: RephraseConfig = Field(default_factory=RephraseConfig)
 
     @classmethod
