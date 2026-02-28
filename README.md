@@ -1,6 +1,13 @@
 # Claudible
+This is just a fun little project that I thought I would open up.  I'm still doing some testing, tuning, and updates, but it's quite useful. You have OpenClaw or Claude Remote Control while you are away, but when I'm at my desk I am surrounded by an army of assistants, and Claudible makes me feel a bit like Iron Man, or a manic air traffic controller.  At any time I have 3-4 machines running.  While I'm really focused on one or another task I keep the other ones going with Claudible.  They tell me when they are done and read the relevant information back to me if there is a question or if I need to give them a new task. For fun, I give them different voices and it's easy to add your own voice or others from voice samples.
 
-Voice interface for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — hear Claude speak with cloned voices, talk back with push-to-talk, and add personality with AI rephrasing.
+Personally I'm a huge Dungeon Crawler Carl fan and I use the System AI voice to yell out "New Achievement!" when it completes a big task for me usually with some snarky comment. It does refuse to do work unless I upload a picture of my feet occasionally.  I'll have to look into that.  
+
+Not available for Windows just yet. I currently work for Microsoft so I should have access to one somewhere around here. :)  
+
+Good Luck, Have Fun, Dont Die!
+
+Voice interface for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — (or anything really) hear Claude speak with cloned voices, talk back with push-to-talk, and add personality with AI rephrasing.
 
 ## Features
 
