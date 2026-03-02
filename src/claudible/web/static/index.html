@@ -124,15 +124,28 @@
       <h1>Personas</h1>
       <div class="card" style="margin-bottom: 1rem;">
         <h3>Create New Persona</h3>
-        <div class="form-group">
-          <label for="persona-new-name">Name</label>
-          <input type="text" id="persona-new-name" placeholder="my-persona">
-        </div>
-        <div class="form-group">
-          <label for="persona-new-prompt">System Prompt</label>
-          <textarea id="persona-new-prompt" rows="4" placeholder="You are a..."></textarea>
-        </div>
-        <button id="persona-create-btn" class="btn btn-primary">Create</button>
+        <form id="persona-create-form">
+          <div class="form-group">
+            <label for="persona-new-name">Name</label>
+            <input type="text" id="persona-new-name" placeholder="my-persona" required>
+          </div>
+          <div class="form-group">
+            <label for="persona-new-trigger">Trigger Word</label>
+            <input type="text" id="persona-new-trigger" placeholder="e.g. jarvis, computer, hey buddy">
+          </div>
+          <div class="form-group">
+            <label for="persona-new-trigger-mode">Trigger Mode</label>
+            <select id="persona-new-trigger-mode">
+              <option value="always" selected>Always listening (default)</option>
+              <option value="ptt">Push-to-talk only</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="persona-new-prompt">System Prompt</label>
+            <textarea id="persona-new-prompt" rows="4" placeholder="You are a..." required></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">Create Persona</button>
+        </form>
       </div>
       <div id="personas-list"></div>
     </section>
@@ -159,11 +172,25 @@
           <label for="stt-vosk-model">VOSK Model</label>
           <input type="text" id="stt-vosk-model" placeholder="small">
         </div>
+        <div class="form-group">
+          <label for="stt-dictation-path">nerd-dictation Path</label>
+          <input type="text" id="stt-dictation-path" placeholder="nerd-dictation">
+        </div>
         <div class="status-row" style="margin: 1rem 0;">
           <span>Input group</span>
           <span id="stt-input-group" class="badge">--</span>
         </div>
-        <h3>Noise Suppression</h3>
+        <h3>Voice Keywords</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          Spoken words that map to keystrokes (e.g. say "submit" to press Enter).
+        </p>
+        <div id="stt-keywords-list"></div>
+        <div class="input-row" style="margin-top:0.5rem;">
+          <input type="text" id="stt-kw-new-word" placeholder="keyword">
+          <input type="text" id="stt-kw-new-key" placeholder="keystroke (e.g. Return)">
+          <button id="stt-kw-add" class="btn btn-secondary btn-sm">Add</button>
+        </div>
+        <h3 style="margin-top:1.25rem;">Noise Suppression</h3>
         <div class="status-row" style="margin: 0.5rem 0;">
           <span>RNNoise installed</span>
           <span id="stt-rnnoise-installed" class="badge">--</span>
@@ -172,16 +199,12 @@
           <span>RNNoise active</span>
           <span id="stt-rnnoise-active" class="badge">--</span>
         </div>
-        <div class="form-group">
-          <label class="toggle-label">
-            <input type="checkbox" id="stt-noise-suppression">
-            <span>Enable noise suppression (config)</span>
-          </label>
-        </div>
         <div class="btn-row">
+          <button id="stt-noise-install" class="btn btn-primary" style="display:none;">Install RNNoise</button>
           <button id="stt-noise-enable" class="btn btn-secondary">Enable RNNoise Filter</button>
           <button id="stt-noise-disable" class="btn btn-secondary">Disable RNNoise Filter</button>
         </div>
+        <div id="stt-noise-install-status" class="test-output" style="display:none;"></div>
         <button id="stt-save" class="btn btn-primary" style="margin-top: 1rem;">Save</button>
       </div>
     </section>

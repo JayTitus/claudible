@@ -251,8 +251,28 @@ async function loadPersonas() {
           <span class="persona-name">${esc(p.name)}</span>
           <span class="persona-badge ${badgeCls}">${badgeText}</span>
         </div>
+        <div class="form-group" style="margin: 0.5rem 0 0.25rem;">
+          <label>Trigger Word</label>
+          <div class="input-row">
+            <input type="text" class="persona-trigger" value="${esc(p.trigger_word)}" placeholder="(none)">
+            <select class="persona-trigger-mode">
+              <option value="always"${p.trigger_mode === "always" ? " selected" : ""}>Always listening</option>
+              <option value="ptt"${p.trigger_mode === "ptt" ? " selected" : ""}>PTT only</option>
+            </select>
+            <button class="btn btn-secondary btn-sm persona-trigger-save">Save</button>
+          </div>
+        </div>
         <div class="persona-prompt" data-name="${esc(p.name)}">${esc(p.prompt)}</div>
       `;
+      // Trigger word + mode save
+      card.querySelector(".persona-trigger-save").addEventListener("click", async () => {
+        const tw = card.querySelector(".persona-trigger").value;
+        const tm = card.querySelector(".persona-trigger-mode").value;
+        try {
+          await api("PATCH", `/personas/${encodeURIComponent(p.name)}/trigger`, { trigger_word: tw, trigger_mode: tm });
+          toast("Trigger settings saved");
+        } catch (e) { toast("Save failed: " + e.message, false); }
+      });
       if (p.custom) {
         const actions = document.createElement("div");
         actions.className = "persona-actions";
@@ -289,8 +309,9 @@ function toggleEdit(card, persona) {
   `;
   area.querySelector("button").addEventListener("click", async () => {
     const newPrompt = area.querySelector("textarea").value;
+    const tw = card.querySelector(".persona-trigger").value;
     try {
-      await api("PUT", `/personas/${encodeURIComponent(persona.name)}`, { prompt: newPrompt });
+      await api("PUT", `/personas/${encodeURIComponent(persona.name)}`, { prompt: newPrompt, trigger_word: tw });
       toast("Persona updated");
       loadPersonas();
     } catch (e) { toast("Save failed: " + e.message, false); }
@@ -307,14 +328,16 @@ async function deletePersona(name) {
   } catch (e) { toast("Delete failed: " + e.message, false); }
 }
 
-document.getElementById("persona-create-btn").addEventListener("click", async () => {
+document.getElementById("persona-create-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
   const name = document.getElementById("persona-new-name").value.trim();
   const prompt = document.getElementById("persona-new-prompt").value.trim();
+  const trigger = document.getElementById("persona-new-trigger").value.trim();
+  const triggerMode = document.getElementById("persona-new-trigger-mode").value;
   if (!name || !prompt) { toast("Name and prompt required", false); return; }
   try {
-    await api("PUT", `/personas/${encodeURIComponent(name)}`, { prompt });
-    document.getElementById("persona-new-name").value = "";
-    document.getElementById("persona-new-prompt").value = "";
+    await api("PUT", `/personas/${encodeURIComponent(name)}`, { prompt, trigger_word: trigger, trigger_mode: triggerMode });
+    document.getElementById("persona-create-form").reset();
     toast("Persona created");
     loadPersonas();
   } catch (e) { toast("Create failed: " + e.message, false); }
@@ -330,17 +353,73 @@ async function loadSTT() {
   document.getElementById("stt-toggle-key").value = cfg.stt.toggle_key;
   document.getElementById("stt-hold-mode").checked = cfg.stt.hold_mode;
   document.getElementById("stt-vosk-model").value = cfg.stt.vosk_model;
-  document.getElementById("stt-noise-suppression").checked = cfg.stt.noise_suppression;
+  document.getElementById("stt-dictation-path").value = cfg.stt.nerd_dictation_path;
+  renderKeywords(cfg.dictation?.keywords || {});
 
   document.getElementById("stt-input-group").innerHTML = badge(s.input_group, "bool");
   document.getElementById("stt-rnnoise-installed").innerHTML = badge(n.installed, "bool");
   document.getElementById("stt-rnnoise-active").innerHTML = badge(n.active, "bool");
 
-  // Disable enable button if not installed
-  const enableBtn = document.getElementById("stt-noise-enable");
-  enableBtn.disabled = !n.installed;
-  enableBtn.title = n.installed ? "" : "RNNoise not installed — run: claudible install";
+  // Show install button when not installed, hide enable/disable
+  document.getElementById("stt-noise-install").style.display = n.installed ? "none" : "";
+  document.getElementById("stt-noise-enable").style.display = n.installed ? "" : "none";
+  document.getElementById("stt-noise-disable").style.display = n.installed ? "" : "none";
 }
+
+let currentKeywords = {};
+
+function renderKeywords(kw) {
+  currentKeywords = { ...kw };
+  const container = document.getElementById("stt-keywords-list");
+  container.innerHTML = "";
+  for (const [word, key] of Object.entries(currentKeywords)) {
+    const row = document.createElement("div");
+    row.className = "input-row";
+    row.style.marginBottom = "0.35rem";
+    row.innerHTML = `
+      <input type="text" value="${esc(word)}" style="flex:1" readonly>
+      <input type="text" value="${esc(key)}" style="flex:1" readonly>
+      <button class="btn btn-danger btn-sm">X</button>
+    `;
+    row.querySelector("button").addEventListener("click", () => {
+      delete currentKeywords[word];
+      renderKeywords(currentKeywords);
+    });
+    container.appendChild(row);
+  }
+}
+
+document.getElementById("stt-kw-add").addEventListener("click", () => {
+  const wordEl = document.getElementById("stt-kw-new-word");
+  const keyEl = document.getElementById("stt-kw-new-key");
+  const word = wordEl.value.trim().toLowerCase();
+  const key = keyEl.value.trim();
+  if (!word || !key) { toast("Both keyword and keystroke required", false); return; }
+  currentKeywords[word] = key;
+  renderKeywords(currentKeywords);
+  wordEl.value = "";
+  keyEl.value = "";
+});
+
+document.getElementById("stt-noise-install").addEventListener("click", async () => {
+  const btn = document.getElementById("stt-noise-install");
+  const status = document.getElementById("stt-noise-install-status");
+  btn.disabled = true;
+  btn.textContent = "Building...";
+  status.style.display = "";
+  status.textContent = "Building RNNoise from source (this may take a minute)...";
+  try {
+    const res = await api("POST", "/noise/install");
+    status.textContent = res.message;
+    toast("RNNoise installed");
+    loadSTT();
+  } catch (e) {
+    status.textContent = "Build failed: " + e.message;
+    toast("RNNoise install failed", false);
+    btn.disabled = false;
+    btn.textContent = "Install RNNoise";
+  }
+});
 
 document.getElementById("stt-noise-enable").addEventListener("click", async () => {
   try {
@@ -360,13 +439,18 @@ document.getElementById("stt-noise-disable").addEventListener("click", async () 
 
 document.getElementById("stt-save").addEventListener("click", async () => {
   try {
-    await api("PATCH", "/config/stt", {
-      push_to_talk_key: document.getElementById("stt-ptt-key").value,
-      toggle_key: document.getElementById("stt-toggle-key").value,
-      hold_mode: document.getElementById("stt-hold-mode").checked,
-      vosk_model: document.getElementById("stt-vosk-model").value,
-      noise_suppression: document.getElementById("stt-noise-suppression").checked,
-    });
+    await Promise.all([
+      api("PATCH", "/config/stt", {
+        push_to_talk_key: document.getElementById("stt-ptt-key").value,
+        toggle_key: document.getElementById("stt-toggle-key").value,
+        hold_mode: document.getElementById("stt-hold-mode").checked,
+        vosk_model: document.getElementById("stt-vosk-model").value,
+        nerd_dictation_path: document.getElementById("stt-dictation-path").value,
+      }),
+      api("PATCH", "/config/dictation", {
+        keywords: currentKeywords,
+      }),
+    ]);
     cfg = null;
     toast("STT settings saved");
   } catch (e) { toast("Save failed: " + e.message, false); }

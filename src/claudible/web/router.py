@@ -44,6 +44,8 @@ class ConfigPatch(BaseModel):
 
 class PersonaBody(BaseModel):
     prompt: str
+    trigger_word: str = ""
+    trigger_mode: str = "always"  # "always" or "ptt"
 
 
 class RephraseTestBody(BaseModel):
@@ -146,12 +148,15 @@ async def voice_test(name: str):
 
 @router.get("/personas")
 async def personas_list():
+    cfg = Config.load()
     result = []
     for name in list_personas():
         result.append({
             "name": name,
             "custom": is_custom(name),
             "prompt": get_persona_prompt(name),
+            "trigger_word": cfg.rephrase.trigger_words.get(name, ""),
+            "trigger_mode": cfg.rephrase.trigger_modes.get(name, "always"),
         })
     return result
 
@@ -162,7 +167,38 @@ async def persona_put(name: str, body: PersonaBody):
     persona_dir.mkdir(parents=True, exist_ok=True)
     dest = persona_dir / f"{name}.txt"
     dest.write_text(body.prompt, encoding="utf-8")
+    # Save trigger word + mode to config
+    cfg = Config.load()
+    if body.trigger_word.strip():
+        cfg.rephrase.trigger_words[name] = body.trigger_word.strip()
+    else:
+        cfg.rephrase.trigger_words.pop(name, None)
+    if body.trigger_mode != "always":
+        cfg.rephrase.trigger_modes[name] = body.trigger_mode
+    else:
+        cfg.rephrase.trigger_modes.pop(name, None)
+    cfg.save()
     return {"ok": True, "name": name}
+
+
+class TriggerWordBody(BaseModel):
+    trigger_word: str = ""
+    trigger_mode: str = "always"
+
+
+@router.patch("/personas/{name}/trigger")
+async def persona_trigger(name: str, body: TriggerWordBody):
+    cfg = Config.load()
+    if body.trigger_word.strip():
+        cfg.rephrase.trigger_words[name] = body.trigger_word.strip()
+    else:
+        cfg.rephrase.trigger_words.pop(name, None)
+    if body.trigger_mode != "always":
+        cfg.rephrase.trigger_modes[name] = body.trigger_mode
+    else:
+        cfg.rephrase.trigger_modes.pop(name, None)
+    cfg.save()
+    return {"ok": True}
 
 
 @router.delete("/personas/{name}")
@@ -219,6 +255,20 @@ async def noise_enable():
 async def noise_disable():
     ok = disable_rnnoise()
     return {"ok": ok}
+
+
+@router.post("/noise/install")
+async def noise_install():
+    import asyncio
+
+    from claudible.stt.noise import install_rnnoise, is_rnnoise_installed
+
+    if is_rnnoise_installed():
+        return {"ok": True, "message": "Already installed"}
+    ok = await asyncio.to_thread(install_rnnoise, auto_yes=True)
+    if ok:
+        return {"ok": True, "message": "RNNoise installed"}
+    raise HTTPException(500, "RNNoise build failed — check server logs")
 
 
 # ── Logs ────────────────────────────────────────────────────────────────────

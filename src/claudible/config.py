@@ -68,6 +68,8 @@ class RephraseConfig(BaseModel):
     api_key: str = ""  # optional — needed for Open WebUI or hosted providers
     model: str = "llama3.2:3b"
     persona: str = "default"
+    trigger_words: dict[str, str] = Field(default_factory=dict)  # persona → trigger word
+    trigger_modes: dict[str, str] = Field(default_factory=dict)  # persona → "always"|"ptt" (default: always)
 
 
 class Config(BaseModel):
