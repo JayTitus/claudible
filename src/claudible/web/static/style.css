@@ -183,6 +183,11 @@ textarea {
 
 .btn-danger:hover { opacity: 0.85; }
 
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .btn-sm {
   padding: 0.3rem 0.75rem;
   font-size: 0.8rem;

@@ -185,6 +185,7 @@ def _step_install_hook(auto_yes: bool) -> None:
     """Step 6: Install Claude Code stop hook."""
     _header("Step 6: Claude Code Hook")
 
+
     from claudible.hooks.installer import install_hook, is_installed
 
     if is_installed():
@@ -198,9 +199,31 @@ def _step_install_hook(auto_yes: bool) -> None:
         click.echo("  Skipped. Install later with: claudible hooks install")
 
 
+def _step_install_rnnoise(auto_yes: bool) -> None:
+    """Step 7: Build and install RNNoise LADSPA plugin."""
+    _header("Step 7: RNNoise Noise Suppression")
+
+    from claudible.stt.noise import install_rnnoise, is_rnnoise_installed
+
+    if is_rnnoise_installed():
+        click.echo("  RNNoise LADSPA plugin already installed.")
+        return
+
+    click.echo("  RNNoise removes background noise from your microphone input.")
+    click.echo("  It builds from source and requires cmake + a C++ compiler.")
+    click.echo()
+
+    if auto_yes or click.confirm("Build and install RNNoise?", default=True):
+        ok = install_rnnoise(auto_yes=True)
+        if not ok:
+            click.echo(click.style("  RNNoise install failed. You can retry later.", fg="yellow"))
+    else:
+        click.echo("  Skipped. Install later with: claudible install")
+
+
 def _step_install_daemon(auto_yes: bool) -> None:
-    """Step 7: Install and start systemd daemon."""
-    _header("Step 7: Systemd Daemon")
+    """Step 8: Install and start systemd daemon."""
+    _header("Step 8: Systemd Daemon")
 
     import subprocess
 
@@ -321,7 +344,10 @@ def run_wizard(auto_yes: bool = False, skip_gpu: bool = False) -> None:
     # Step 6: Hook
     _step_install_hook(auto_yes)
 
-    # Step 7: Daemon
+    # Step 7: RNNoise
+    _step_install_rnnoise(auto_yes)
+
+    # Step 8: Daemon
     _step_install_daemon(auto_yes)
 
     # Summary

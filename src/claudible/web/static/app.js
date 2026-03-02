@@ -335,6 +335,11 @@ async function loadSTT() {
   document.getElementById("stt-input-group").innerHTML = badge(s.input_group, "bool");
   document.getElementById("stt-rnnoise-installed").innerHTML = badge(n.installed, "bool");
   document.getElementById("stt-rnnoise-active").innerHTML = badge(n.active, "bool");
+
+  // Disable enable button if not installed
+  const enableBtn = document.getElementById("stt-noise-enable");
+  enableBtn.disabled = !n.installed;
+  enableBtn.title = n.installed ? "" : "RNNoise not installed — run: claudible install";
 }
 
 document.getElementById("stt-noise-enable").addEventListener("click", async () => {
