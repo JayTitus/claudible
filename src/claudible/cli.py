@@ -530,12 +530,21 @@ def tray() -> None:
 
 @main.command("config")
 def config_cmd() -> None:
-    """Open the configuration TUI (alias for 'tui')."""
-    try:
-        from claudible.tui.app import ClaudibleApp  # noqa: F811
-    except ImportError:
-        click.echo("Textual not installed. Install with: pip install claudible[tui]", err=True)
+    """Open the web config UI in a browser."""
+    import webbrowser
+
+    from claudible.config import Config
+    from claudible.tts.client import TTSClient
+
+    cfg = Config.load()
+    url = f"http://{cfg.tts.host}:{cfg.tts.port}/config"
+    client = TTSClient(base_url=f"http://{cfg.tts.host}:{cfg.tts.port}")
+    healthy = asyncio.run(client.health())
+
+    if not healthy:
+        click.echo(f"TTS server is not running on {cfg.tts.host}:{cfg.tts.port}", err=True)
+        click.echo("Start it with: claudible server", err=True)
         sys.exit(1)
 
-    app = ClaudibleApp()
-    app.run()
+    click.echo(f"Opening {url}")
+    webbrowser.open(url)

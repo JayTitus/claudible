@@ -205,10 +205,6 @@ ContentSwitcher {
     height: auto;
 }
 
-#rnnoise-install-status {
-    margin: 0 0 0 21;
-    height: auto;
-}
 """
 
 
@@ -548,12 +544,6 @@ class ClaudibleApp(App):
                     id="cfg-stt-noise-suppression",
                 )
             yield Static("", id="rnnoise-status")
-            with Horizontal(classes="btn-row"):
-                yield Button(
-                    "Install RNNoise", id="btn-rnnoise-install",
-                    variant="warning", classes="btn-inline",
-                )
-            yield Static("", id="rnnoise-install-status")
 
         with Horizontal(classes="btn-row"):
             yield Button("Save STT Settings", id="btn-stt-save", variant="primary")
@@ -621,7 +611,6 @@ class ClaudibleApp(App):
             "btn-rephrase-test": self._do_rephrase_test,
             "btn-rephrase-save": self._save_rephrase_config,
             "btn-stt-save": self._save_stt_config,
-            "btn-rnnoise-install": self._install_rnnoise,
             "btn-logs-refresh": self._load_logs,
             "btn-logs-clear": self._clear_logs,
         }
@@ -938,13 +927,10 @@ class ClaudibleApp(App):
             elif self.config.stt.noise_suppression and installed:
                 parts.append("[yellow]● Filter not active[/]")
 
-            w.update("  ".join(parts))
+            if not installed:
+                parts.append("[dim](run: claudible install)[/]")
 
-            # Show/hide install button
-            try:
-                self.query_one("#btn-rnnoise-install").display = not installed
-            except Exception:
-                pass
+            w.update("  ".join(parts))
         except Exception as e:
             w.update(f"[dim]Could not check RNNoise status: {e}[/]")
 
@@ -957,7 +943,7 @@ class ClaudibleApp(App):
         )
 
         if enabled and not is_rnnoise_installed():
-            self._set_status("RNNoise plugin not installed — install it first")
+            self._set_status("RNNoise not installed — run: claudible install")
             try:
                 self.query_one("#cfg-stt-noise-suppression", Switch).value = False
             except Exception:
@@ -974,24 +960,6 @@ class ClaudibleApp(App):
             self._set_status("Noise suppression " + ("enabled" if enabled else "disabled"))
         else:
             self._set_status("Failed to " + ("enable" if enabled else "disable") + " noise suppression")
-
-        self._check_rnnoise_status()
-
-    @work(exclusive=True, group="rnnoise-install")
-    async def _install_rnnoise(self) -> None:
-        status_w = self.query_one("#rnnoise-install-status", Static)
-        status_w.update("[dim]Building RNNoise from source... (this may take a minute)[/]")
-        self._set_status("Building RNNoise...")
-
-        from claudible.stt.noise import install_rnnoise
-
-        ok = await asyncio.to_thread(install_rnnoise, auto_yes=True)
-        if ok:
-            status_w.update("[green]● RNNoise installed successfully![/]")
-            self._set_status("RNNoise installed")
-        else:
-            status_w.update("[red]● RNNoise build failed — check terminal for details[/]")
-            self._set_status("RNNoise install failed")
 
         self._check_rnnoise_status()
 

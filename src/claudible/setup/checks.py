@@ -71,6 +71,8 @@ SYSTEM_DEPS = [
     "libcairo2-dev",            # PyGObject build dep
     "gir1.2-ayatanaappindicator3-0.1",  # System tray on KDE/GNOME
     "xdotool",                  # nerd-dictation types into focused window (X11)
+    "cmake",                    # RNNoise LADSPA plugin build
+    "build-essential",          # RNNoise LADSPA plugin build (C++ compiler)
 ]
 
 # Python packages to verify/fix — these are also in pyproject.toml dependencies,

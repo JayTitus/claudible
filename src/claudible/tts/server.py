@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.resources
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from claudible.config import Config
 from claudible.tts.audio import play_audio
 from claudible.tts.engine import TTSEngine
 from claudible.tts.voices import get_voice, list_voices
+from claudible.web.router import router as api_router
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +52,21 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Claudible TTS", lifespan=lifespan)
+
+# ── Web config UI ───────────────────────────────────────────────────────────
+
+app.include_router(api_router)
+
+_static_ref = importlib.resources.files("claudible.web") / "static"
+_static_path = Path(str(_static_ref))
+app.mount("/static", StaticFiles(directory=str(_static_path)), name="static")
+
+
+@app.get("/config")
+async def config_ui():
+    """Serve the web config UI."""
+    index = _static_path / "index.html"
+    return FileResponse(str(index), media_type="text/html")
 
 
 async def _playback_worker():

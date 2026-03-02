@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claudible Config</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="logo">claudible</div>
+    <a href="#" class="nav-item active" data-tab="dashboard">Dashboard</a>
+    <a href="#" class="nav-item" data-tab="voice">Voice</a>
+    <a href="#" class="nav-item" data-tab="rephrase">Rephrase</a>
+    <a href="#" class="nav-item" data-tab="personas">Personas</a>
+    <a href="#" class="nav-item" data-tab="stt">STT</a>
+    <a href="#" class="nav-item" data-tab="logs">Logs</a>
+  </nav>
+
+  <main class="content">
+    <!-- Toast container -->
+    <div id="toast-container"></div>
+
+    <!-- Dashboard -->
+    <section id="tab-dashboard" class="tab active">
+      <h1>Dashboard</h1>
+      <div class="card-grid">
+        <div class="card">
+          <h3>Server</h3>
+          <div class="status-row"><span>Model loaded</span><span id="dash-model" class="badge">--</span></div>
+          <div class="status-row"><span>Hook installed</span><span id="dash-hook" class="badge">--</span></div>
+        </div>
+        <div class="card">
+          <h3>Voices</h3>
+          <div class="status-row"><span>Installed</span><span id="dash-voices" class="badge">--</span></div>
+          <div class="status-row"><span>Active voice</span><span id="dash-active-voice">--</span></div>
+        </div>
+        <div class="card">
+          <h3>Rephrase</h3>
+          <div class="status-row"><span>Enabled</span><span id="dash-rephrase" class="badge">--</span></div>
+          <div class="status-row"><span>Persona</span><span id="dash-persona">--</span></div>
+          <div class="status-row"><span>Model</span><span id="dash-rephrase-model">--</span></div>
+        </div>
+        <div class="card">
+          <h3>Input</h3>
+          <div class="status-row"><span>Input group</span><span id="dash-input" class="badge">--</span></div>
+          <div class="status-row"><span>RNNoise</span><span id="dash-rnnoise" class="badge">--</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Voice -->
+    <section id="tab-voice" class="tab">
+      <h1>Voice Settings</h1>
+      <div class="card">
+        <div class="form-group">
+          <label for="voice-select">Active Voice</label>
+          <div class="input-row">
+            <select id="voice-select"></select>
+            <button id="voice-test-btn" class="btn btn-secondary">Test</button>
+          </div>
+        </div>
+        <div id="voice-info" class="voice-info"></div>
+        <div class="form-group">
+          <label for="voice-speed">Speed</label>
+          <input type="number" id="voice-speed" step="0.1" min="0.5" max="2.0">
+        </div>
+        <div class="form-group">
+          <label for="voice-language">Language</label>
+          <input type="text" id="voice-language" placeholder="en">
+        </div>
+        <div class="form-group">
+          <label for="voice-dir">Voices Directory</label>
+          <input type="text" id="voice-dir" placeholder="(default)">
+        </div>
+        <button id="voice-save" class="btn btn-primary">Save</button>
+      </div>
+    </section>
+
+    <!-- Rephrase -->
+    <section id="tab-rephrase" class="tab">
+      <h1>Rephrase Settings</h1>
+      <div class="card">
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="rephrase-enabled">
+            <span>Rephrase enabled</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="rephrase-url">API URL</label>
+          <input type="text" id="rephrase-url" placeholder="http://localhost:11434/v1">
+        </div>
+        <div class="form-group">
+          <label for="rephrase-key">API Key</label>
+          <input type="password" id="rephrase-key" placeholder="(optional)">
+        </div>
+        <div class="form-group">
+          <label for="rephrase-model">Model</label>
+          <div class="input-row">
+            <select id="rephrase-model"></select>
+            <button id="rephrase-fetch-models" class="btn btn-secondary">Fetch Models</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="rephrase-persona">Persona</label>
+          <select id="rephrase-persona"></select>
+        </div>
+        <button id="rephrase-save" class="btn btn-primary">Save</button>
+      </div>
+      <div class="card" style="margin-top: 1rem;">
+        <h3>Test Rephrase</h3>
+        <div class="form-group">
+          <label for="rephrase-test-input">Input text</label>
+          <textarea id="rephrase-test-input" rows="3" placeholder="Enter text to rephrase..."></textarea>
+        </div>
+        <button id="rephrase-test-btn" class="btn btn-secondary">Test Rephrase</button>
+        <div id="rephrase-test-output" class="test-output"></div>
+      </div>
+    </section>
+
+    <!-- Personas -->
+    <section id="tab-personas" class="tab">
+      <h1>Personas</h1>
+      <div class="card" style="margin-bottom: 1rem;">
+        <h3>Create New Persona</h3>
+        <div class="form-group">
+          <label for="persona-new-name">Name</label>
+          <input type="text" id="persona-new-name" placeholder="my-persona">
+        </div>
+        <div class="form-group">
+          <label for="persona-new-prompt">System Prompt</label>
+          <textarea id="persona-new-prompt" rows="4" placeholder="You are a..."></textarea>
+        </div>
+        <button id="persona-create-btn" class="btn btn-primary">Create</button>
+      </div>
+      <div id="personas-list"></div>
+    </section>
+
+    <!-- STT -->
+    <section id="tab-stt" class="tab">
+      <h1>Speech-to-Text Settings</h1>
+      <div class="card">
+        <div class="form-group">
+          <label for="stt-ptt-key">Push-to-Talk Key</label>
+          <input type="text" id="stt-ptt-key" placeholder="KEY_RIGHTCTRL">
+        </div>
+        <div class="form-group">
+          <label for="stt-toggle-key">Toggle Key</label>
+          <input type="text" id="stt-toggle-key" placeholder="KEY_SCROLLLOCK">
+        </div>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="stt-hold-mode">
+            <span>Hold mode (hold key to talk)</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="stt-vosk-model">VOSK Model</label>
+          <input type="text" id="stt-vosk-model" placeholder="small">
+        </div>
+        <div class="status-row" style="margin: 1rem 0;">
+          <span>Input group</span>
+          <span id="stt-input-group" class="badge">--</span>
+        </div>
+        <h3>Noise Suppression</h3>
+        <div class="status-row" style="margin: 0.5rem 0;">
+          <span>RNNoise installed</span>
+          <span id="stt-rnnoise-installed" class="badge">--</span>
+        </div>
+        <div class="status-row" style="margin: 0.5rem 0;">
+          <span>RNNoise active</span>
+          <span id="stt-rnnoise-active" class="badge">--</span>
+        </div>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="stt-noise-suppression">
+            <span>Enable noise suppression (config)</span>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button id="stt-noise-enable" class="btn btn-secondary">Enable RNNoise Filter</button>
+          <button id="stt-noise-disable" class="btn btn-secondary">Disable RNNoise Filter</button>
+        </div>
+        <button id="stt-save" class="btn btn-primary" style="margin-top: 1rem;">Save</button>
+      </div>
+    </section>
+
+    <!-- Logs -->
+    <section id="tab-logs" class="tab">
+      <h1>Logs</h1>
+      <div class="btn-row" style="margin-bottom: 1rem;">
+        <button id="logs-refresh" class="btn btn-secondary">Refresh</button>
+        <button id="logs-clear" class="btn btn-secondary">Clear</button>
+      </div>
+      <pre id="logs-output" class="log-viewer"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

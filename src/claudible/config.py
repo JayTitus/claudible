@@ -17,6 +17,20 @@ else:
 import tomli_w
 
 
+def _migrate(data: dict) -> None:
+    """Migrate old config keys to current schema."""
+    rephrase = data.get("rephrase", {})
+    # ollama_url → api_url (added in v0.3)
+    if "ollama_url" in rephrase and "api_url" not in rephrase:
+        url = rephrase.pop("ollama_url")
+        rephrase["api_url"] = url.rstrip("/") + "/v1"
+    elif "ollama_url" in rephrase:
+        del rephrase["ollama_url"]
+    # Clean up bogus model values from old TUI bug
+    if rephrase.get("model", "").startswith("Select."):
+        del rephrase["model"]
+
+
 class TTSConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 5959
@@ -69,6 +83,7 @@ class Config(BaseModel):
         if path.exists():
             with open(path, "rb") as f:
                 data = tomllib.load(f)
+            _migrate(data)
             return cls.model_validate(data)
         return cls()
 
