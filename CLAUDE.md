@@ -24,12 +24,15 @@ src/claudible/
 ├── hooks/              # Claude Code integration
 │   ├── stop_hook.py    # Stop hook (reads stdin JSON, sends to TTS)
 │   └── installer.py    # Hook install/uninstall
-├── tui/                # Textual TUI (future)
+├── tui/                # Textual TUI (legacy)
+├── web/                # Browser config UI
+│   ├── router.py       # FastAPI API routes (/api prefix)
+│   └── static/         # HTML/CSS/JS SPA
 └── systemd/            # User service units
 ```
 
 ## Key Architecture
-- **TTS Server**: Persistent FastAPI daemon on localhost:5959, XTTS v2 on GPU
+- **TTS Server**: Persistent FastAPI daemon on localhost:5959, XTTS v2 on GPU, serves web config UI at /config
 - **STT**: Wraps nerd-dictation as subprocess, push-to-talk via evdev
 - **Rephrase**: Ollama API, transforms text AFTER Claude output but BEFORE TTS
 - **Claude Code hook**: Stop hook reads `last_assistant_message` from stdin JSON, fire-and-forget to TTS server
@@ -54,6 +57,7 @@ pytest tests/
 claudible                        # Status overview
 claudible run                    # Start TTS server + tray icon
 claudible server                 # Start TTS server only
+claudible config                 # Open browser config UI (localhost:5959/config)
 claudible ptt                    # Push-to-talk listener
 claudible speak "text"           # Send text to TTS
 claudible voices list            # List voices
@@ -72,6 +76,7 @@ claudible daemon install         # Install systemd user service
 claudible daemon start/stop      # Start/stop daemon
 claudible daemon status/logs     # Check daemon status/logs
 claudible install                # Full interactive setup
+claudible tui                    # Legacy Textual TUI
 ```
 
 ## Personas

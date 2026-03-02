@@ -21,6 +21,7 @@ Everything runs locally. No cloud APIs, no data leaving your machine.
 - **Voice Management** — Clone from audio files, record your own, or combine short clips
 - **12 Built-in Personas** — From a NASA mission controller to a film noir detective
 - **Custom Personas** — Drop a text file and create your own character
+- **Browser Config UI** — Web-based settings at `localhost:5959/config` (Dashboard, Voice, Rephrase, Personas, STT, Logs)
 - **System Tray** — Tray icon with STT/TTS toggles and server status
 - **Systemd Daemon** — Runs on login as a user service
 
@@ -172,7 +173,15 @@ Accepts WAV, MP3, FLAC, and OGG files.
 
 ## Configuration
 
-Config lives at `~/.config/claudible/config.toml`:
+Open the browser config UI (requires the TTS server to be running):
+
+```bash
+claudible config
+```
+
+This opens `http://localhost:5959/config` with a dark-themed dashboard where you can manage voice settings, rephrase options, personas, STT keybinds, noise suppression, and view logs — all from the browser.
+
+Config is stored at `~/.config/claudible/config.toml`:
 
 ```toml
 [tts]
@@ -189,7 +198,7 @@ toggle_key = "KEY_SCROLLLOCK"
 
 [rephrase]
 enabled = false
-ollama_url = "http://localhost:11434"
+api_url = "http://localhost:11434/v1"
 model = "llama3.2:3b"
 persona = "default"
 ```
@@ -265,8 +274,9 @@ claudible daemon start              # Start daemon
 claudible daemon stop               # Stop daemon
 claudible daemon status             # Show daemon status
 claudible daemon logs               # Follow logs
+claudible config                    # Open browser config UI
 claudible install                   # Interactive setup wizard
-claudible tui                       # Configuration TUI
+claudible tui                       # Legacy Textual TUI
 claudible tray                      # System tray icon only
 ```
 
@@ -283,6 +293,9 @@ Make sure you have a system tray (KDE, GNOME with AppIndicator extension, etc.).
 
 **`transformers` version error**
 Coqui TTS 0.22 requires `transformers<4.45`. Re-run `claudible install` to auto-fix, or manually: `uv tool inject claudible transformers==4.44.2`.
+
+**Config UI not loading / 404**
+The TTS server must be running for `claudible config` to work. If you updated claudible, restart the daemon (`claudible daemon stop && claudible daemon start`) — an old server process may still be running with the previous code.
 
 **Server not starting**
 Check logs with `claudible daemon logs` or run `claudible server` interactively to see errors.
