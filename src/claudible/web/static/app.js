@@ -9,7 +9,8 @@ async function api(method, path, body) {
   const resp = await fetch("/api" + path, opts);
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(err);
+    try { const j = JSON.parse(err); throw new Error(j.detail || err); }
+    catch (e) { if (e instanceof SyntaxError) throw new Error(err); throw e; }
   }
   return resp.json();
 }
@@ -78,6 +79,25 @@ async function loadDashboard() {
     document.getElementById("dash-rephrase-model").textContent = c.rephrase.model;
     document.getElementById("dash-input").innerHTML = badge(s.input_group, "bool");
     document.getElementById("dash-rnnoise").innerHTML = badge(s.rnnoise_active, "bool");
+
+    // Missing deps banner
+    const banner = document.getElementById("dash-deps-banner");
+    if (s.missing_deps && s.missing_deps.length > 0) {
+      const aptPkgs = s.missing_deps.filter(d => !d.includes("see README"));
+      const other = s.missing_deps.filter(d => d.includes("see README"));
+      let html = "<strong>Missing dependencies:</strong> " + s.missing_deps.join(", ");
+      if (aptPkgs.length > 0) {
+        html += "<br>Run: <code>sudo apt install " + aptPkgs.join(" ") + "</code>";
+      }
+      if (other.length > 0) {
+        html += "<br>Also needed: " + other.join(", ");
+      }
+      html += "<br>Or run <code>claudible install</code> to set up everything.";
+      banner.innerHTML = html;
+      banner.style.display = "";
+    } else {
+      banner.style.display = "none";
+    }
   } catch (e) {
     console.error("Dashboard load failed:", e);
   }

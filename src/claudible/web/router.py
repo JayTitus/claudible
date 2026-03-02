@@ -86,11 +86,29 @@ def _in_input_group() -> bool:
         return False
 
 
+def _check_missing_system_deps() -> list[str]:
+    """Check for missing system tools needed by claudible."""
+    import shutil
+
+    checks = {
+        "cmake": "cmake",
+        "make": "build-essential",
+        "git": "git",
+        "nerd-dictation": "nerd-dictation (see README)",
+    }
+    missing = []
+    for tool, pkg in checks.items():
+        if not shutil.which(tool):
+            missing.append(pkg)
+    return missing
+
+
 @router.get("/status")
 async def get_status():
     from claudible.tts.server import engine
 
     voices = list_voices()
+    missing_deps = _check_missing_system_deps()
     return {
         "model_loaded": engine.is_loaded if engine else False,
         "hook_installed": hook_is_installed(),
@@ -98,6 +116,7 @@ async def get_status():
         "input_group": _in_input_group(),
         "rnnoise_installed": is_rnnoise_installed(),
         "rnnoise_active": is_rnnoise_active(),
+        "missing_deps": missing_deps,
     }
 
 
@@ -260,11 +279,22 @@ async def noise_disable():
 @router.post("/noise/install")
 async def noise_install():
     import asyncio
+    import shutil
 
     from claudible.stt.noise import install_rnnoise, is_rnnoise_installed
 
     if is_rnnoise_installed():
         return {"ok": True, "message": "Already installed"}
+
+    # Check build deps before attempting
+    missing = [t for t in ("cmake", "make", "git") if not shutil.which(t)]
+    if missing:
+        raise HTTPException(
+            400,
+            f"Missing build tools: {', '.join(missing)}. "
+            f"Install with: sudo apt install cmake build-essential git",
+        )
+
     ok = await asyncio.to_thread(install_rnnoise, auto_yes=True)
     if ok:
         return {"ok": True, "message": "RNNoise installed"}

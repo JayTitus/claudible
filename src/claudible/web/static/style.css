@@ -331,6 +331,26 @@ textarea {
   word-break: break-all;
 }
 
+/* Deps banner */
+.deps-banner {
+  background: rgba(231,76,60,0.12);
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.deps-banner code {
+  background: var(--bg-input);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.85rem;
+  user-select: all;
+}
+
 /* Tabs */
 .tab { display: none; }
 .tab.active { display: block; }
