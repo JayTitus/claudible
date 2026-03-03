@@ -1,9 +1,10 @@
 # Claudible
-This is just a fun little project that I thought I would open up.  I'm still doing some testing, tuning, and updates, but it's quite useful. You have OpenClaw or Claude Remote Control while you are away, but when I'm at my desk I am surrounded by an army of assistants, and Claudible makes me feel a bit like Iron Man, or a manic air traffic controller.  At any time I have 3-4 machines running.  While I'm really focused on one or another task I keep the other ones going with Claudible.  They tell me when they are done and read the relevant information back to me if there is a question or if I need to give them a new task. For fun, I give them different voices and it's easy to add your own voice or others from voice samples.
 
-Personally I'm a huge Dungeon Crawler Carl fan and I use the System AI voice to yell out "New Achievement!" when it completes a big task for me usually with some snarky comment. It does refuse to do work unless I upload a picture of my feet occasionally.  I'll have to look into that.  
+This is just a fun little project that I thought I would open up. I'm still doing some testing, tuning, and updates, but it's quite useful. You have OpenClaw or Claude Remote Control while you are away, but when I'm at my desk I am surrounded by an army of assistants, and Claudible makes me feel a bit like Iron Man, or a manic air traffic controller. At any time I have 3-4 machines running. While I'm really focused on one or another task I keep the other ones going with Claudible. They tell me when they are done and read the relevant information back to me if there is a question or if I need to give them a new task. For fun, I give them different voices and it's easy to add your own voice or others from voice samples.
 
-Not available for Windows just yet. I currently work for Microsoft so I should have access to one somewhere around here. :)  
+Personally I'm a huge Dungeon Crawler Carl fan and I use the System AI voice to yell out "New Achievement!" when it completes a big task for me usually with some snarky comment. It does refuse to do work unless I upload a picture of my feet occasionally. I'll have to look into that.
+
+Not available for Windows just yet. I currently work for Microsoft so I should have access to one somewhere around here. :)
 
 Good Luck, Have Fun, Dont Die!
 
@@ -15,13 +16,14 @@ Everything runs locally. No cloud APIs, no data leaving your machine.
 
 - **Text-to-Speech** — Coqui XTTS v2 running locally on your GPU with voice cloning
 - **Speech-to-Text** — Push-to-talk via nerd-dictation (VOSK), types directly into your terminal
-- **Personality Rephrasing** — Optional Ollama pass that rephrases Claude's output before speaking
+- **Personality Rephrasing** — Optional LLM pass that rephrases Claude's output before speaking (any OpenAI-compatible API)
 - **Smart Filtering** — Only speaks conversational text, skips code blocks and command output
 - **Claude Code Integration** — Stop hook automatically speaks every response
 - **Voice Management** — Clone from audio files, record your own, or combine short clips
 - **12 Built-in Personas** — From a NASA mission controller to a film noir detective
-- **Custom Personas** — Drop a text file and create your own character
-- **Browser Config UI** — Web-based settings at `localhost:5959/config` (Dashboard, Voice, Rephrase, Personas, STT, Logs)
+- **Custom Personas** — Create and manage personas with trigger words from the config UI
+- **Browser Config UI** — Full settings dashboard at `localhost:5959/config`
+- **Noise Suppression** — RNNoise background noise removal via PipeWire (installable from the UI)
 - **System Tray** — Tray icon with STT/TTS toggles and server status
 - **Systemd Daemon** — Runs on login as a user service
 
@@ -43,11 +45,10 @@ For input, hold Right Ctrl to talk — your speech is transcribed and typed into
 
 ## Requirements
 
-- Linux
+- Linux (Ubuntu/Debian-based)
 - NVIDIA GPU with 4+ GB VRAM
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (for STT)
-- [Ollama](https://ollama.ai) (optional, for rephrasing)
+- [Ollama](https://ollama.ai) or any OpenAI-compatible API (optional, for rephrasing)
 
 ## Install
 
@@ -55,36 +56,49 @@ For input, hold Right Ctrl to talk — your speech is transcribed and typed into
 # Install uv if needed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install claudible globally (uv downloads Python 3.11 automatically)
-uv tool install claudible --python 3.11
-
-# Run the interactive setup wizard (installs deps, configures, starts daemon)
-claudible install
-```
-
-To install from a local clone instead of PyPI:
-
-```bash
+# Clone and install
 git clone https://github.com/JayTitus/claudible.git
 uv tool install ./claudible --python 3.11
+
+# Run the setup wizard (installs all dependencies, configures everything, starts daemon)
 claudible install
 ```
+
+The setup wizard handles everything: system packages, Python dependencies, VOSK speech model, nerd-dictation, RNNoise noise suppression, Claude Code hook, and the systemd daemon. It will prompt for sudo when needed for system packages.
 
 ## Quick Start
 
+After `claudible install` completes, the daemon is already running. Open the config UI:
+
 ```bash
-# Option 1: Run interactively (TTS server + tray icon)
-claudible run
+claudible config
+```
 
-# Option 2: Run as a daemon
-claudible daemon start
+This opens `http://localhost:5959/config` in your browser.
 
-# Install the Claude Code hook so responses are spoken automatically
-claudible hooks install
+To test speech manually:
 
-# Test speech manually
+```bash
 claudible speak "Hello, I am claudible."
 ```
+
+## Config UI
+
+The browser-based config UI at `localhost:5959/config` is the primary way to manage claudible. It has six tabs:
+
+![Config UI Dashboard](docs/screenshots/dashboard.png)
+
+**Dashboard** — Server status, hook status, voice count, rephrase status, input group, and RNNoise status at a glance. Shows a banner with install commands if any system dependencies are missing.
+
+**Voice** — Select active voice, test voices, adjust speed and language. Shows voice sample details (duration, sample rate, file size).
+
+**Rephrase** — Enable/disable rephrasing, configure the API endpoint (Ollama, Open WebUI, or any OpenAI-compatible API), select model, choose persona. Includes a test rephrase panel to preview output.
+
+**Personas** — Browse all 12 built-in personas and any custom ones. Create new personas with a name, trigger word, trigger mode (always-listening or PTT-only), and system prompt. Edit or delete custom personas inline.
+
+**STT** — Configure push-to-talk key, toggle key, hold mode, VOSK model, and nerd-dictation path. Manage voice keywords (spoken words that map to keystrokes, e.g. "submit" presses Enter). Install and toggle RNNoise noise suppression directly from the UI.
+
+**Logs** — View daemon logs (journalctl output) in a scrollable viewer.
 
 ## Personas
 
@@ -105,130 +119,40 @@ Claudible ships with 12 built-in personas that rephrase Claude's output before s
 | **oracle** | Wise, calm, pattern-and-flow |
 | **engineer** | Scottish chief engineer — "She cannae take any more!" |
 
-Enable rephrasing in your config:
+Personas can be managed entirely from the **Personas** tab in the config UI. Each persona can have a **trigger word** (for future wake-word detection) and a **trigger mode** (always-listening or PTT-only).
 
-```toml
-[rephrase]
-enabled = true
-model = "llama3.2:3b"
-persona = "noir"
-```
-
-### Custom Personas
-
-Create your own persona with a text file:
-
-```bash
-# Open your editor to write the system prompt
-claudible personas create my-persona
-
-# Or pass the prompt directly
-claudible personas create deadpan -p "Rephrase text in a bone-dry, deadpan style. No excitement. Ever. Keep technical accuracy."
-```
-
-Custom personas are stored at `~/.config/claudible/personas/*.txt` and override built-in personas with the same name.
-
-```bash
-claudible personas list          # List all personas (built-in + custom)
-claudible personas show noir     # Show a persona's system prompt
-claudible personas delete NAME   # Delete a custom persona
-```
+Custom personas are stored at `~/.config/claudible/personas/*.txt`.
 
 ## Voices
 
-Voices are stored at `~/.local/share/claudible/voices/`. Each voice is a directory containing a `.wav` reference file.
+Voices are stored at `~/.local/share/claudible/voices/`. Each voice is a directory containing a `.wav` reference file. Select and test voices from the **Voice** tab in the config UI.
+
+To add voices from the command line:
 
 ```bash
-# List installed voices
-claudible voices list
-
 # Add a voice from a WAV file (validates and resamples to 22050 Hz mono)
 claudible voices add myvoice /path/to/sample.wav
-
-# Show voice sample details (duration, sample rate, etc.)
-claudible voices info myvoice
 
 # Record a voice from your microphone
 claudible voices record myvoice
 
-# Test a voice
-claudible voices test myvoice
+# Combine multiple short clips into one XTTS-ready sample
+claudible voices combine hal clip1.wav clip2.mp3 clip3.wav
 ```
 
 For best results, use 6-15 seconds of clean speech audio at 22050 Hz.
 
-### Combining Short Clips
-
-If you only have short audio clips (2-3 seconds each), combine them into one XTTS-ready sample:
-
-```bash
-# Combine clips, picking the longest first until target duration is reached
-claudible voices combine hal clip1.wav clip2.mp3 clip3.wav
-
-# Adjust target duration and silence gap between clips
-claudible voices combine hal clips/*.wav --duration 12 --gap 0.3
-```
-
-Accepts WAV, MP3, FLAC, and OGG files.
-
-## Configuration
-
-Open the browser config UI (requires the TTS server to be running):
-
-```bash
-claudible config
-```
-
-This opens `http://localhost:5959/config` with a dark-themed dashboard where you can manage voice settings, rephrase options, personas, STT keybinds, noise suppression, and view logs — all from the browser.
-
-Config is stored at `~/.config/claudible/config.toml`:
-
-```toml
-[tts]
-host = "127.0.0.1"
-port = 5959
-voice = "default"
-language = "en"
-speed = 1.0
-
-[stt]
-push_to_talk_key = "KEY_RIGHTCTRL"
-hold_mode = true
-toggle_key = "KEY_SCROLLLOCK"
-
-[rephrase]
-enabled = false
-api_url = "http://localhost:11434/v1"
-model = "llama3.2:3b"
-persona = "default"
-```
-
-## Keybinds
-
-| Key | Action |
-|-----|--------|
-| Right Ctrl | Push-to-talk (hold to speak) |
-| Scroll Lock | Toggle continuous STT on/off |
-
-Keybinds use evdev and require the user to be in the `input` group:
-
-```bash
-sudo usermod -aG input $USER
-# Log out and back in for the group change to take effect
-```
-
 ## Daemon Management
 
+The setup wizard installs and starts the daemon automatically. For manual control:
+
 ```bash
-claudible daemon install    # Copy service file, enable on login
-claudible daemon uninstall  # Disable and remove service file
-claudible daemon start      # Start the service now
+claudible daemon start      # Start the service
 claudible daemon stop       # Stop the service
 claudible daemon status     # Show service status
 claudible daemon logs       # Follow service logs (Ctrl+C to stop)
+claudible daemon install    # Reinstall service file (e.g. after cuDNN changes)
 ```
-
-The `daemon install` command auto-detects the cuDNN library path and writes it into the service file so the GPU works correctly under systemd.
 
 ## Building from Source
 
@@ -236,69 +160,35 @@ The `daemon install` command auto-detects the cuDNN library path and writes it i
 git clone https://github.com/JayTitus/claudible.git
 cd claudible
 
-# Install in development mode (uv downloads Python 3.11 if needed)
 uv venv --python 3.11
 uv pip install -e ".[dev]"
 
-# Run tests
 uv run pytest tests/
-
-# Run the linter
 uv run ruff check src/
-```
-
-## CLI Reference
-
-```
-claudible                           # Status overview
-claudible run                       # TTS server + tray icon
-claudible server                    # Start TTS server only
-claudible ptt                       # Push-to-talk listener only
-claudible speak "text"              # Send text to TTS
-claudible voices list               # List voices
-claudible voices add NAME FILE      # Add voice from WAV
-claudible voices combine NAME FILES # Combine short clips into one sample
-claudible voices info NAME          # Show voice sample details
-claudible voices record NAME        # Record from mic
-claudible voices test NAME          # Test a voice
-claudible personas list             # List all personas
-claudible personas show NAME        # Show persona prompt
-claudible personas create NAME      # Create custom persona
-claudible personas delete NAME      # Delete custom persona
-claudible hooks install             # Install Claude Code hook
-claudible hooks uninstall           # Remove hook
-claudible hooks status              # Check hook status
-claudible daemon install            # Install systemd service
-claudible daemon uninstall          # Remove systemd service
-claudible daemon start              # Start daemon
-claudible daemon stop               # Stop daemon
-claudible daemon status             # Show daemon status
-claudible daemon logs               # Follow logs
-claudible config                    # Open browser config UI
-claudible install                   # Interactive setup wizard
-claudible tui                       # Legacy Textual TUI
-claudible tray                      # System tray icon only
 ```
 
 ## Troubleshooting
 
+**Config UI not loading / 404**
+The TTS server must be running. If you updated claudible, restart the daemon — an old server process may still be running with the previous code:
+```bash
+claudible daemon stop && claudible daemon start
+```
+
 **cuDNN not found / CUDA errors under systemd**
-The daemon service needs `LD_LIBRARY_PATH` pointing to the nvidia-cudnn package. `claudible daemon install` detects this automatically. If you installed cudnn after the daemon, re-run `claudible daemon install`.
+Re-run `claudible daemon install` — it auto-detects the cuDNN library path.
 
 **"Permission denied" on keybinds**
-Add your user to the `input` group: `sudo usermod -aG input $USER`, then log out and back in.
-
-**No tray icon**
-Make sure you have a system tray (KDE, GNOME with AppIndicator extension, etc.). The `PyGObject` dependency is included for proper GTK/AppIndicator support.
+`claudible install` handles this, but if needed: `sudo usermod -aG input $USER`, then log out and back in.
 
 **`transformers` version error**
-Coqui TTS 0.22 requires `transformers<4.45`. Re-run `claudible install` to auto-fix, or manually: `uv tool inject claudible transformers==4.44.2`.
+Coqui TTS 0.22 requires `transformers<4.45`. Re-run `claudible install` to auto-fix.
 
-**Config UI not loading / 404**
-The TTS server must be running for `claudible config` to work. If you updated claudible, restart the daemon (`claudible daemon stop && claudible daemon start`) — an old server process may still be running with the previous code.
+**RNNoise build fails**
+Ensure cmake and build-essential are installed: `sudo apt install cmake build-essential`. Then use the Install button in the STT tab, or re-run `claudible install`.
 
 **Server not starting**
-Check logs with `claudible daemon logs` or run `claudible server` interactively to see errors.
+Check logs with `claudible daemon logs` or run `claudible server` interactively.
 
 ## License
 
