@@ -199,6 +199,33 @@ def _step_install_hook(auto_yes: bool) -> None:
         click.echo("  Skipped. Install later with: claudible hooks install")
 
 
+def _step_install_voices() -> None:
+    """Step 2: Install bundled persona voices."""
+    _header("Step 2: Persona Voices")
+
+    from claudible.data.bundled_voices import install_bundled_voices, setup_persona_voice_defaults
+
+    installed = install_bundled_voices()
+    if installed:
+        click.echo(f"  Installed {len(installed)} voices: {', '.join(installed)}")
+    else:
+        click.echo("  All bundled voices already installed.")
+
+    # Set up default persona → voice mappings
+    from claudible.config import Config
+
+    cfg = Config.load()
+    defaults = setup_persona_voice_defaults()
+    changed = False
+    for persona, voice in defaults.items():
+        if persona not in cfg.rephrase.persona_voices:
+            cfg.rephrase.persona_voices[persona] = voice
+            changed = True
+    if changed:
+        cfg.save()
+        click.echo(f"  Set default voices for {len(defaults)} personas.")
+
+
 def _step_install_rnnoise(auto_yes: bool) -> None:
     """Step 7: Build and install RNNoise LADSPA plugin."""
     _header("Step 7: RNNoise Noise Suppression")
@@ -317,7 +344,10 @@ def run_wizard(auto_yes: bool = False, skip_gpu: bool = False) -> None:
             click.echo("Fix the issues above and re-run: claudible install")
             sys.exit(1)
 
-    # Step 2: Voice
+    # Step 2: Install bundled voices
+    _step_install_voices()
+
+    # Step 3: Voice
     voice_name = _step_configure_voice(auto_yes)
 
     # Step 3: PTT key

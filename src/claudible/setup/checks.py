@@ -242,7 +242,59 @@ VOSK_MODELS = [
         "ram": "~100 MB",
         "note": "Lowest accuracy. Best for low-end hardware / Raspberry Pi.",
     },
+    {
+        "name": "gigaspeech",
+        "label": "Gigaspeech — podcast-optimized",
+        "zip": "vosk-model-en-us-0.42-gigaspeech",
+        "url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.42-gigaspeech.zip",
+        "size": "2.3 GB",
+        "wer": "5.64%",
+        "ram": "~2.5 GB",
+        "note": "Trained on Gigaspeech. Best for podcasts and long-form speech.",
+    },
 ]
+
+
+def download_vosk_model(model_name: str) -> str:
+    """Download and install a VOSK model by name. Returns status message.
+
+    Raises ValueError if model not found, RuntimeError on download/extract failure.
+    """
+    model_info = None
+    for m in VOSK_MODELS:
+        if m["name"] == model_name:
+            model_info = m
+            break
+    if not model_info:
+        raise ValueError(f"Unknown VOSK model: {model_name}")
+
+    vosk_dir = Path.home() / ".local" / "share" / "vosk"
+    model_dir = vosk_dir / model_info["name"]
+
+    if model_dir.exists() and any(model_dir.iterdir()):
+        return f"Model '{model_name}' already installed"
+
+    vosk_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = vosk_dir / f"{model_info['zip']}.zip"
+
+    try:
+        urlretrieve(model_info["url"], zip_path)
+    except Exception as e:
+        raise RuntimeError(f"Download failed: {e}")
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(vosk_dir)
+        extracted = vosk_dir / model_info["zip"]
+        if extracted.exists():
+            if model_dir.exists():
+                shutil.rmtree(model_dir)
+            extracted.rename(model_dir)
+        zip_path.unlink(missing_ok=True)
+    except Exception as e:
+        raise RuntimeError(f"Extraction failed: {e}")
+
+    return f"Model '{model_name}' installed ({model_info['size']})"
 
 
 def _get_gpu_info() -> str:

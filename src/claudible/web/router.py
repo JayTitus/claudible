@@ -151,9 +151,15 @@ async def voice_test(name: str):
 
     import asyncio
 
+    test_text = (
+        f"Hello, this is the {name} voice for claudible. "
+        "The quick brown fox jumps over the lazy dog. "
+        "All systems are nominal and ready for your command."
+    )
+
     audio, sr = await asyncio.to_thread(
         engine.synthesize,
-        "Hello, this is a voice test from claudible.",
+        test_text,
         voice.wav_file,
         config.tts.language,
         config.tts.speed,
@@ -167,15 +173,19 @@ async def voice_test(name: str):
 
 @router.get("/personas")
 async def personas_list():
+    from claudible.data.bundled_voices import PERSONA_VOICES
+
     cfg = Config.load()
     result = []
     for name in list_personas():
+        voice = cfg.rephrase.persona_voices.get(name) or PERSONA_VOICES.get(name, "")
         result.append({
             "name": name,
             "custom": is_custom(name),
             "prompt": get_persona_prompt(name),
             "trigger_word": cfg.rephrase.trigger_words.get(name, ""),
             "trigger_mode": cfg.rephrase.trigger_modes.get(name, "always"),
+            "voice": voice,
         })
     return result
 
@@ -218,6 +228,30 @@ async def persona_trigger(name: str, body: TriggerWordBody):
         cfg.rephrase.trigger_modes.pop(name, None)
     cfg.save()
     return {"ok": True}
+
+
+class PersonaActivateBody(BaseModel):
+    voice: str = ""
+
+
+@router.post("/personas/{name}/activate")
+async def persona_activate(name: str, body: PersonaActivateBody):
+    """Set this persona as active and switch voice."""
+    from claudible.data.bundled_voices import PERSONA_VOICES
+
+    cfg = Config.load()
+    cfg.rephrase.persona = name
+    # Use provided voice, or saved persona voice, or default mapping
+    voice = (
+        body.voice
+        or cfg.rephrase.persona_voices.get(name)
+        or PERSONA_VOICES.get(name)
+    )
+    if voice:
+        cfg.tts.voice = voice
+        cfg.rephrase.persona_voices[name] = voice
+    cfg.save()
+    return {"ok": True, "voice": voice or cfg.tts.voice}
 
 
 @router.delete("/personas/{name}")
@@ -299,6 +333,46 @@ async def noise_install():
     if ok:
         return {"ok": True, "message": "RNNoise installed"}
     raise HTTPException(500, "RNNoise build failed — check server logs")
+
+
+# ── VOSK models ────────────────────────────────────────────────────────────
+
+
+@router.get("/vosk-models")
+async def vosk_models():
+    from claudible.setup.checks import VOSK_MODELS
+
+    vosk_dir = Path.home() / ".local" / "share" / "vosk"
+    result = []
+    for m in VOSK_MODELS:
+        installed = (vosk_dir / m["name"]).is_dir()
+        result.append({
+            "name": m["name"],
+            "label": m["label"],
+            "size": m["size"],
+            "wer": m["wer"],
+            "installed": installed,
+        })
+    return result
+
+
+# ── VOSK model download ───────────────────────────────────────────────────
+
+
+@router.post("/vosk-models/{name}/download")
+async def vosk_model_download(name: str):
+    import asyncio
+
+    from claudible.setup.checks import VOSK_MODELS, download_vosk_model
+
+    if not any(m["name"] == name for m in VOSK_MODELS):
+        raise HTTPException(404, f"Unknown VOSK model: {name}")
+
+    try:
+        msg = await asyncio.to_thread(download_vosk_model, name)
+        return {"ok": True, "message": msg}
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(500, str(e))
 
 
 # ── Logs ────────────────────────────────────────────────────────────────────

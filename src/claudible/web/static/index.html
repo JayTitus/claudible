@@ -54,14 +54,27 @@
     <section id="tab-voice" class="tab">
       <h1>Voice Settings</h1>
       <div class="card">
+        <div class="status-row" style="margin-bottom:0.75rem;">
+          <span>Active Voice</span>
+          <span id="voice-active-name" style="font-weight:600;">--</span>
+        </div>
+        <div class="status-row" style="margin-bottom:0.75rem;">
+          <span>Active Persona</span>
+          <span id="voice-active-persona" style="font-weight:600;">--</span>
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+          Change the active voice and persona from the <a href="#" data-tab="personas" class="nav-link-inline">Personas</a> tab.
+        </p>
+        <h3>Test Voices</h3>
         <div class="form-group">
-          <label for="voice-select">Active Voice</label>
+          <label for="voice-select">Voice</label>
           <div class="input-row">
             <select id="voice-select"></select>
             <button id="voice-test-btn" class="btn btn-secondary">Test</button>
           </div>
         </div>
         <div id="voice-info" class="voice-info"></div>
+        <h3 style="margin-top:1rem;">Playback Settings</h3>
         <div class="form-group">
           <label for="voice-speed">Speed</label>
           <input type="number" id="voice-speed" step="0.1" min="0.5" max="2.0">
@@ -99,7 +112,8 @@
         <div class="form-group">
           <label for="rephrase-model">Model</label>
           <div class="input-row">
-            <select id="rephrase-model"></select>
+            <input type="text" id="rephrase-model" list="rephrase-model-list" placeholder="e.g. llama3.2:3b">
+            <datalist id="rephrase-model-list"></datalist>
             <button id="rephrase-fetch-models" class="btn btn-secondary">Fetch Models</button>
           </div>
         </div>
@@ -131,17 +145,6 @@
             <input type="text" id="persona-new-name" placeholder="my-persona" required>
           </div>
           <div class="form-group">
-            <label for="persona-new-trigger">Trigger Word</label>
-            <input type="text" id="persona-new-trigger" placeholder="e.g. jarvis, computer, hey buddy">
-          </div>
-          <div class="form-group">
-            <label for="persona-new-trigger-mode">Trigger Mode</label>
-            <select id="persona-new-trigger-mode">
-              <option value="always" selected>Always listening (default)</option>
-              <option value="ptt">Push-to-talk only</option>
-            </select>
-          </div>
-          <div class="form-group">
             <label for="persona-new-prompt">System Prompt</label>
             <textarea id="persona-new-prompt" rows="4" placeholder="You are a..." required></textarea>
           </div>
@@ -171,7 +174,12 @@
         </div>
         <div class="form-group">
           <label for="stt-vosk-model">VOSK Model</label>
-          <input type="text" id="stt-vosk-model" placeholder="small">
+          <div class="input-row">
+            <select id="stt-vosk-model"></select>
+            <button id="stt-vosk-download" class="btn btn-secondary">Download</button>
+          </div>
+          <div id="stt-vosk-info" class="voice-info" style="margin-top:0.35rem;"></div>
+          <div id="stt-vosk-download-status" class="test-output" style="display:none;"></div>
         </div>
         <div class="form-group">
           <label for="stt-dictation-path">nerd-dictation Path</label>
@@ -181,7 +189,24 @@
           <span>Input group</span>
           <span id="stt-input-group" class="badge">--</span>
         </div>
-        <h3>Voice Keywords</h3>
+
+        <h3>Trigger Word</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          Wake word for the active persona. When detected, activates speech recognition.
+        </p>
+        <div class="form-group">
+          <label for="stt-trigger-word">Trigger Word</label>
+          <input type="text" id="stt-trigger-word" placeholder="e.g. jarvis, computer">
+        </div>
+        <div class="form-group">
+          <label for="stt-trigger-mode">Trigger Mode</label>
+          <select id="stt-trigger-mode">
+            <option value="always">Always listening</option>
+            <option value="ptt">Push-to-talk only</option>
+          </select>
+        </div>
+
+        <h3 style="margin-top:1.25rem;">Voice Keywords</h3>
         <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
           Spoken words that map to keystrokes (e.g. say "submit" to press Enter).
         </p>
@@ -191,6 +216,7 @@
           <input type="text" id="stt-kw-new-key" placeholder="keystroke (e.g. Return)">
           <button id="stt-kw-add" class="btn btn-secondary btn-sm">Add</button>
         </div>
+
         <h3 style="margin-top:1.25rem;">Noise Suppression</h3>
         <div class="status-row" style="margin: 0.5rem 0;">
           <span>RNNoise installed</span>

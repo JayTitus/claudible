@@ -70,6 +70,7 @@ class RephraseConfig(BaseModel):
     persona: str = "default"
     trigger_words: dict[str, str] = Field(default_factory=dict)  # persona → trigger word
     trigger_modes: dict[str, str] = Field(default_factory=dict)  # persona → "always"|"ptt" (default: always)
+    persona_voices: dict[str, str] = Field(default_factory=dict)  # persona → voice name
 
 
 class Config(BaseModel):

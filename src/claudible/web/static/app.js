@@ -1,5 +1,14 @@
 /* Claudible Config UI */
 
+/* ── Helpers ─────────────────────────────────────────────────────────────── */
+
+function esc(s) {
+  if (s == null) return "";
+  const d = document.createElement("div");
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
 async function api(method, path, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
@@ -108,11 +117,16 @@ async function loadDashboard() {
 let voicesData = [];
 
 async function loadVoice() {
-  if (!cfg) await loadConfig();
+  await loadConfig();
   try {
     voicesData = await api("GET", "/voices");
-  } catch { voicesData = []; }
+  } catch (e) { voicesData = []; }
 
+  // Show active voice and persona
+  document.getElementById("voice-active-name").textContent = cfg.tts.voice;
+  document.getElementById("voice-active-persona").textContent = cfg.rephrase.persona;
+
+  // Populate test voice dropdown with all voices
   const sel = document.getElementById("voice-select");
   sel.innerHTML = "";
   voicesData.forEach(v => {
@@ -152,12 +166,11 @@ document.getElementById("voice-test-btn").addEventListener("click", async () => 
 document.getElementById("voice-save").addEventListener("click", async () => {
   try {
     await api("PATCH", "/config/tts", {
-      voice: document.getElementById("voice-select").value,
       speed: parseFloat(document.getElementById("voice-speed").value),
       language: document.getElementById("voice-language").value,
       voices_dir: document.getElementById("voice-dir").value,
     });
-    cfg = null; // invalidate cache
+    cfg = null;
     toast("Voice settings saved");
   } catch (e) { toast("Save failed: " + e.message, false); }
 });
@@ -165,10 +178,11 @@ document.getElementById("voice-save").addEventListener("click", async () => {
 /* ── Rephrase ──────────────────────────────────────────────────────────── */
 
 async function loadRephrase() {
-  if (!cfg) await loadConfig();
+  await loadConfig();
   document.getElementById("rephrase-enabled").checked = cfg.rephrase.enabled;
   document.getElementById("rephrase-url").value = cfg.rephrase.api_url;
   document.getElementById("rephrase-key").value = cfg.rephrase.api_key;
+  document.getElementById("rephrase-model").value = cfg.rephrase.model;
 
   // Load personas for selector
   try {
@@ -182,42 +196,25 @@ async function loadRephrase() {
       if (p.name === cfg.rephrase.persona) opt.selected = true;
       sel.appendChild(opt);
     });
-  } catch {}
+  } catch (e) { console.error("Failed to load personas for rephrase:", e); }
 
-  // Set current model in dropdown (add as option if not present)
+  // Fetch models into datalist
   await fetchModels(false);
 }
 
 async function fetchModels(showToast = true) {
-  const sel = document.getElementById("rephrase-model");
+  const datalist = document.getElementById("rephrase-model-list");
   try {
     const models = await api("GET", "/models");
-    const current = cfg?.rephrase?.model || "";
-    sel.innerHTML = "";
-    let found = false;
+    datalist.innerHTML = "";
     models.forEach(m => {
       const opt = document.createElement("option");
       opt.value = m.id;
-      opt.textContent = m.id;
-      if (m.id === current) { opt.selected = true; found = true; }
-      sel.appendChild(opt);
+      datalist.appendChild(opt);
     });
-    if (!found && current) {
-      const opt = document.createElement("option");
-      opt.value = current;
-      opt.textContent = current + " (configured)";
-      opt.selected = true;
-      sel.prepend(opt);
-    }
     if (showToast) toast(`Found ${models.length} models`);
   } catch (e) {
-    sel.innerHTML = "";
-    if (cfg?.rephrase?.model) {
-      const opt = document.createElement("option");
-      opt.value = cfg.rephrase.model;
-      opt.textContent = cfg.rephrase.model;
-      sel.appendChild(opt);
-    }
+    datalist.innerHTML = "";
     if (showToast) toast("Failed to fetch models: " + e.message, false);
   }
 }
@@ -259,62 +256,127 @@ document.getElementById("rephrase-test-btn").addEventListener("click", async () 
 async function loadPersonas() {
   const container = document.getElementById("personas-list");
   try {
-    const personas = await api("GET", "/personas");
+    const [personas, voices] = await Promise.all([
+      api("GET", "/personas"),
+      api("GET", "/voices").catch(() => []),
+    ]);
+    await loadConfig();
+    const activePersona = cfg.rephrase.persona;
+    const activeVoice = cfg.tts.voice;
+
     container.innerHTML = "";
     personas.forEach(p => {
+      const isActive = p.name === activePersona;
       const card = document.createElement("div");
-      card.className = "persona-card";
-      const badgeCls = p.custom ? "persona-badge-custom" : "persona-badge-builtin";
-      const badgeText = p.custom ? "custom" : "built-in";
-      card.innerHTML = `
-        <div class="persona-header">
-          <span class="persona-name">${esc(p.name)}</span>
-          <span class="persona-badge ${badgeCls}">${badgeText}</span>
-        </div>
-        <div class="form-group" style="margin: 0.5rem 0 0.25rem;">
-          <label>Trigger Word</label>
-          <div class="input-row">
-            <input type="text" class="persona-trigger" value="${esc(p.trigger_word)}" placeholder="(none)">
-            <select class="persona-trigger-mode">
-              <option value="always"${p.trigger_mode === "always" ? " selected" : ""}>Always listening</option>
-              <option value="ptt"${p.trigger_mode === "ptt" ? " selected" : ""}>PTT only</option>
-            </select>
-            <button class="btn btn-secondary btn-sm persona-trigger-save">Save</button>
-          </div>
-        </div>
-        <div class="persona-prompt" data-name="${esc(p.name)}">${esc(p.prompt)}</div>
-      `;
-      // Trigger word + mode save
-      card.querySelector(".persona-trigger-save").addEventListener("click", async () => {
-        const tw = card.querySelector(".persona-trigger").value;
-        const tm = card.querySelector(".persona-trigger-mode").value;
-        try {
-          await api("PATCH", `/personas/${encodeURIComponent(p.name)}/trigger`, { trigger_word: tw, trigger_mode: tm });
-          toast("Trigger settings saved");
-        } catch (e) { toast("Save failed: " + e.message, false); }
+      card.className = "persona-card" + (isActive ? " persona-active" : "");
+
+      // Header: name + badges
+      const header = document.createElement("div");
+      header.className = "persona-header";
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "persona-name";
+      nameSpan.textContent = p.name;
+      header.appendChild(nameSpan);
+      const badgeWrap = document.createElement("span");
+      if (isActive) {
+        const ab = document.createElement("span");
+        ab.className = "persona-badge persona-badge-active";
+        ab.textContent = "active";
+        badgeWrap.appendChild(ab);
+      }
+      const tb = document.createElement("span");
+      tb.className = "persona-badge " + (p.custom ? "persona-badge-custom" : "persona-badge-builtin");
+      tb.textContent = p.custom ? "custom" : "built-in";
+      badgeWrap.appendChild(tb);
+      header.appendChild(badgeWrap);
+      card.appendChild(header);
+
+      // Prompt preview
+      const promptEl = document.createElement("div");
+      promptEl.className = "persona-prompt";
+      promptEl.textContent = p.prompt || "(no prompt)";
+      promptEl.addEventListener("click", () => promptEl.classList.toggle("expanded"));
+      card.appendChild(promptEl);
+
+      // Voice row: label + dropdown + Test + Use
+      const voiceLabel = document.createElement("label");
+      voiceLabel.textContent = "Voice";
+      voiceLabel.style.cssText = "display:block; font-size:0.8rem; color:var(--text-muted); margin:0.5rem 0 0.25rem;";
+      card.appendChild(voiceLabel);
+
+      const row = document.createElement("div");
+      row.className = "input-row";
+
+      const voiceSel = document.createElement("select");
+      voiceSel.style.flex = "1";
+      // Determine which voice to pre-select: saved persona voice, or active voice, or first
+      const savedVoice = p.voice || (isActive ? activeVoice : "") || (voices[0]?.name || "");
+      voices.forEach(v => {
+        const opt = document.createElement("option");
+        opt.value = v.name;
+        opt.textContent = v.name;
+        if (v.name === savedVoice) opt.selected = true;
+        voiceSel.appendChild(opt);
       });
+      row.appendChild(voiceSel);
+
+      const testBtn = document.createElement("button");
+      testBtn.className = "btn btn-secondary btn-sm";
+      testBtn.textContent = "Test";
+      testBtn.addEventListener("click", async () => {
+        const voice = voiceSel.value;
+        if (!voice) { toast("Select a voice first", false); return; }
+        testBtn.disabled = true;
+        testBtn.textContent = "Playing...";
+        try {
+          await api("POST", `/voices/${encodeURIComponent(voice)}/test`);
+          toast("Playing " + voice + "...");
+        } catch (e) { toast("Test failed: " + e.message, false); }
+        testBtn.disabled = false;
+        testBtn.textContent = "Test";
+      });
+      row.appendChild(testBtn);
+
+      const useBtn = document.createElement("button");
+      useBtn.className = isActive ? "btn btn-secondary btn-sm" : "btn btn-primary btn-sm";
+      useBtn.textContent = isActive ? "Active" : "Use";
+      useBtn.addEventListener("click", async () => {
+        const voice = voiceSel.value;
+        try {
+          await api("POST", `/personas/${encodeURIComponent(p.name)}/activate`, { voice });
+          cfg = null;
+          toast("Switched to " + p.name + (voice ? " with " + voice : ""));
+          loadPersonas();
+        } catch (e) { toast("Failed: " + e.message, false); }
+      });
+      row.appendChild(useBtn);
+      card.appendChild(row);
+
+      // Edit/Delete for custom
       if (p.custom) {
         const actions = document.createElement("div");
         actions.className = "persona-actions";
+
         const editBtn = document.createElement("button");
         editBtn.className = "btn btn-secondary btn-sm";
         editBtn.textContent = "Edit";
         editBtn.addEventListener("click", () => toggleEdit(card, p));
+
         const delBtn = document.createElement("button");
         delBtn.className = "btn btn-danger btn-sm";
         delBtn.textContent = "Delete";
         delBtn.addEventListener("click", () => deletePersona(p.name));
+
         actions.appendChild(editBtn);
         actions.appendChild(delBtn);
         card.appendChild(actions);
       }
-      // Toggle expand on click
-      const promptEl = card.querySelector(".persona-prompt");
-      promptEl.addEventListener("click", () => promptEl.classList.toggle("expanded"));
+
       container.appendChild(card);
     });
   } catch (e) {
-    container.innerHTML = '<div class="card">Failed to load personas</div>';
+    console.error("Personas load failed:", e);
+    container.innerHTML = '<div class="card">Failed to load personas: ' + esc(e.message) + '</div>';
   }
 }
 
@@ -323,24 +385,32 @@ function toggleEdit(card, persona) {
   if (area) { area.remove(); return; }
   area = document.createElement("div");
   area.className = "persona-edit-area";
-  area.innerHTML = `
-    <textarea rows="5">${esc(persona.prompt)}</textarea>
-    <button class="btn btn-primary btn-sm">Save</button>
-  `;
-  area.querySelector("button").addEventListener("click", async () => {
-    const newPrompt = area.querySelector("textarea").value;
-    const tw = card.querySelector(".persona-trigger").value;
+
+  const ta = document.createElement("textarea");
+  ta.rows = 5;
+  ta.value = persona.prompt || "";
+  area.appendChild(ta);
+
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "btn btn-primary btn-sm";
+  saveBtn.textContent = "Save";
+  saveBtn.addEventListener("click", async () => {
     try {
-      await api("PUT", `/personas/${encodeURIComponent(persona.name)}`, { prompt: newPrompt, trigger_word: tw });
+      await api("PUT", `/personas/${encodeURIComponent(persona.name)}`, {
+        prompt: ta.value,
+        trigger_word: "",
+        trigger_mode: "always",
+      });
       toast("Persona updated");
       loadPersonas();
     } catch (e) { toast("Save failed: " + e.message, false); }
   });
+  area.appendChild(saveBtn);
   card.appendChild(area);
 }
 
 async function deletePersona(name) {
-  if (!confirm(`Delete persona "${name}"?`)) return;
+  if (!confirm('Delete persona "' + name + '"?')) return;
   try {
     await api("DELETE", `/personas/${encodeURIComponent(name)}`);
     toast("Persona deleted");
@@ -352,11 +422,13 @@ document.getElementById("persona-create-form").addEventListener("submit", async 
   e.preventDefault();
   const name = document.getElementById("persona-new-name").value.trim();
   const prompt = document.getElementById("persona-new-prompt").value.trim();
-  const trigger = document.getElementById("persona-new-trigger").value.trim();
-  const triggerMode = document.getElementById("persona-new-trigger-mode").value;
   if (!name || !prompt) { toast("Name and prompt required", false); return; }
   try {
-    await api("PUT", `/personas/${encodeURIComponent(name)}`, { prompt, trigger_word: trigger, trigger_mode: triggerMode });
+    await api("PUT", `/personas/${encodeURIComponent(name)}`, {
+      prompt,
+      trigger_word: "",
+      trigger_mode: "always",
+    });
     document.getElementById("persona-create-form").reset();
     toast("Persona created");
     loadPersonas();
@@ -366,14 +438,41 @@ document.getElementById("persona-create-form").addEventListener("submit", async 
 /* ── STT ────────────────────────────────────────────────────────────────── */
 
 async function loadSTT() {
-  if (!cfg) await loadConfig();
-  const [s, n] = await Promise.all([loadStatus(), api("GET", "/noise")]);
+  await loadConfig();
+  const [s, n, voskModels] = await Promise.all([
+    loadStatus(),
+    api("GET", "/noise"),
+    api("GET", "/vosk-models").catch(() => []),
+  ]);
 
   document.getElementById("stt-ptt-key").value = cfg.stt.push_to_talk_key;
   document.getElementById("stt-toggle-key").value = cfg.stt.toggle_key;
   document.getElementById("stt-hold-mode").checked = cfg.stt.hold_mode;
-  document.getElementById("stt-vosk-model").value = cfg.stt.vosk_model;
   document.getElementById("stt-dictation-path").value = cfg.stt.nerd_dictation_path;
+
+  // Populate VOSK model dropdown
+  const voskSel = document.getElementById("stt-vosk-model");
+  const voskInfo = document.getElementById("stt-vosk-info");
+  const voskDlBtn = document.getElementById("stt-vosk-download");
+  const voskDlStatus = document.getElementById("stt-vosk-download-status");
+  _voskModels = voskModels;
+  voskSel.innerHTML = "";
+  voskModels.forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m.name;
+    opt.textContent = m.name + (m.installed ? " (installed)" : "");
+    if (m.name === cfg.stt.vosk_model) opt.selected = true;
+    voskSel.appendChild(opt);
+  });
+  updateVoskInfo();
+
+  // Trigger word for active persona
+  const persona = cfg.rephrase.persona || "default";
+  const tw = (cfg.rephrase.trigger_words || {})[persona] || "";
+  const tm = (cfg.rephrase.trigger_modes || {})[persona] || "always";
+  document.getElementById("stt-trigger-word").value = tw;
+  document.getElementById("stt-trigger-mode").value = tm;
+
   renderKeywords(cfg.dictation?.keywords || {});
 
   document.getElementById("stt-input-group").innerHTML = badge(s.input_group, "bool");
@@ -386,6 +485,49 @@ async function loadSTT() {
   document.getElementById("stt-noise-disable").style.display = n.installed ? "" : "none";
 }
 
+let _voskModels = [];
+
+function updateVoskInfo() {
+  const voskSel = document.getElementById("stt-vosk-model");
+  const voskInfo = document.getElementById("stt-vosk-info");
+  const voskDlBtn = document.getElementById("stt-vosk-download");
+  const sel = voskSel.value;
+  const m = _voskModels.find(v => v.name === sel);
+  if (m) {
+    voskInfo.textContent = `WER: ${m.wer} | Size: ${m.size}` + (m.installed ? " | Installed" : " | Not downloaded");
+    voskDlBtn.style.display = m.installed ? "none" : "";
+  } else {
+    voskInfo.textContent = "";
+    voskDlBtn.style.display = "none";
+  }
+}
+
+document.getElementById("stt-vosk-model").addEventListener("change", updateVoskInfo);
+
+document.getElementById("stt-vosk-download").addEventListener("click", async () => {
+  const name = document.getElementById("stt-vosk-model").value;
+  const btn = document.getElementById("stt-vosk-download");
+  const status = document.getElementById("stt-vosk-download-status");
+  btn.disabled = true;
+  btn.textContent = "Downloading...";
+  status.style.display = "";
+  status.textContent = "Downloading " + name + " model (this may take a while for large models)...";
+  try {
+    const res = await api("POST", `/vosk-models/${encodeURIComponent(name)}/download`);
+    status.textContent = res.message;
+    toast("Model downloaded");
+    // Refresh the dropdown
+    btn.textContent = "Download";
+    btn.disabled = false;
+    loadSTT();
+  } catch (e) {
+    status.textContent = "Download failed: " + e.message;
+    toast("Download failed", false);
+    btn.textContent = "Download";
+    btn.disabled = false;
+  }
+});
+
 let currentKeywords = {};
 
 function renderKeywords(kw) {
@@ -396,15 +538,30 @@ function renderKeywords(kw) {
     const row = document.createElement("div");
     row.className = "input-row";
     row.style.marginBottom = "0.35rem";
-    row.innerHTML = `
-      <input type="text" value="${esc(word)}" style="flex:1" readonly>
-      <input type="text" value="${esc(key)}" style="flex:1" readonly>
-      <button class="btn btn-danger btn-sm">X</button>
-    `;
-    row.querySelector("button").addEventListener("click", () => {
+
+    const wordInput = document.createElement("input");
+    wordInput.type = "text";
+    wordInput.value = word;
+    wordInput.readOnly = true;
+    wordInput.style.flex = "1";
+
+    const keyInput = document.createElement("input");
+    keyInput.type = "text";
+    keyInput.value = key;
+    keyInput.readOnly = true;
+    keyInput.style.flex = "1";
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger btn-sm";
+    delBtn.textContent = "X";
+    delBtn.addEventListener("click", () => {
       delete currentKeywords[word];
       renderKeywords(currentKeywords);
     });
+
+    row.appendChild(wordInput);
+    row.appendChild(keyInput);
+    row.appendChild(delBtn);
     container.appendChild(row);
   }
 }
@@ -459,6 +616,15 @@ document.getElementById("stt-noise-disable").addEventListener("click", async () 
 
 document.getElementById("stt-save").addEventListener("click", async () => {
   try {
+    // Save trigger word for active persona
+    const persona = cfg?.rephrase?.persona || "default";
+    const triggerWord = document.getElementById("stt-trigger-word").value.trim();
+    const triggerMode = document.getElementById("stt-trigger-mode").value;
+    await api("PATCH", `/personas/${encodeURIComponent(persona)}/trigger`, {
+      trigger_word: triggerWord,
+      trigger_mode: triggerMode,
+    });
+
     await Promise.all([
       api("PATCH", "/config/stt", {
         push_to_talk_key: document.getElementById("stt-ptt-key").value,
@@ -494,14 +660,6 @@ document.getElementById("logs-clear").addEventListener("click", () => {
   document.getElementById("logs-output").textContent = "";
 });
 
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
-
-function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-
 /* ── Tab loaders ─────────────────────────────────────────────────────────── */
 
 const loaders = {
@@ -519,6 +677,22 @@ setInterval(async () => {
   const activeTab = document.querySelector(".nav-item.active")?.dataset.tab;
   if (activeTab === "dashboard") loadDashboard();
 }, 5000);
+
+/* ── Inline nav links ────────────────────────────────────────────────────── */
+
+document.addEventListener("click", e => {
+  const link = e.target.closest(".nav-link-inline");
+  if (!link) return;
+  e.preventDefault();
+  const target = link.dataset.tab;
+  if (!target) return;
+  navItems.forEach(n => n.classList.remove("active"));
+  tabs.forEach(t => t.classList.remove("active"));
+  const navItem = document.querySelector(`.nav-item[data-tab="${target}"]`);
+  if (navItem) navItem.classList.add("active");
+  document.getElementById("tab-" + target).classList.add("active");
+  loaders[target]?.();
+});
 
 /* ── Initial load ────────────────────────────────────────────────────────── */
 

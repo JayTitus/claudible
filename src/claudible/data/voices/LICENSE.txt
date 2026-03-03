@@ -1,0 +1,33 @@
+Bundled Voice Samples — Attribution & Licensing
+================================================
+
+All voice samples in this directory are sourced from the VCTK Corpus,
+distributed via the Kyutai TTS Voices collection on HuggingFace.
+
+Source: https://huggingface.co/kyutai/tts-voices/tree/main/vctk/
+Original corpus: https://datashare.ed.ac.uk/handle/10283/3443
+
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+         https://creativecommons.org/licenses/by/4.0/
+
+Attribution: CSTR VCTK Corpus: English Multi-speaker Corpus for CSTR
+             Voice Cloning Toolkit (version 0.92)
+             Junichi Yamagishi, Christophe Veaux, Kirsten MacDonald
+             University of Edinburgh, The Centre for Speech Technology Research
+
+Speaker assignments:
+  default-male:     p232 (23, Male, Southern England)
+  default-female:   p257 (24, Female, Southern England)
+  jarvis:           p243 (22, Male, London)
+  casual:           p311 (21, Male, Iowa, USA)
+  terse:            p258 (22, Male, Southern England)
+  mission-control:  p360 (19, Male, New Jersey, USA)
+  noir:             p263 (22, Male, Aberdeen, Scotland)
+  butler:           p227 (38, Male, Cumbria, England)
+  pirate:           p247 (22, Male, Argyll, Scotland)
+  drill-sergeant:   p334 (18, Male, Chicago, USA)
+  announcer:        p287 (23, Male, York, England)
+  oracle:           p254 (21, Male, Surrey, England)
+  engineer:         p281 (29, Male, Edinburgh, Scotland)
+
+All samples resampled to 22050 Hz mono for XTTS v2 compatibility.

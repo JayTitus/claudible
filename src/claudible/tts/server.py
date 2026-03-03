@@ -61,12 +61,24 @@ _static_ref = importlib.resources.files("claudible.web") / "static"
 _static_path = Path(str(_static_ref))
 app.mount("/static", StaticFiles(directory=str(_static_path)), name="static")
 
+# Version hash for cache busting — changes on each server start
+import hashlib as _hashlib
+import time as _time
+
+_cache_bust = _hashlib.md5(str(_time.time()).encode()).hexdigest()[:8]
+
 
 @app.get("/config")
 async def config_ui():
-    """Serve the web config UI."""
+    """Serve the web config UI with cache-busting asset URLs."""
+    from starlette.responses import HTMLResponse
+
     index = _static_path / "index.html"
-    return FileResponse(str(index), media_type="text/html")
+    html = index.read_text()
+    # Append version query to CSS and JS references
+    html = html.replace('href="/static/style.css"', f'href="/static/style.css?v={_cache_bust}"')
+    html = html.replace('src="/static/app.js"', f'src="/static/app.js?v={_cache_bust}"')
+    return HTMLResponse(html)
 
 
 async def _playback_worker():
