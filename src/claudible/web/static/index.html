@@ -11,6 +11,7 @@
     <div class="logo">claudible</div>
     <a href="#" class="nav-item active" data-tab="dashboard">Dashboard</a>
     <a href="#" class="nav-item" data-tab="voice">Voice</a>
+    <a href="#" class="nav-item" data-tab="studio">Voice Studio</a>
     <a href="#" class="nav-item" data-tab="rephrase">Rephrase</a>
     <a href="#" class="nav-item" data-tab="personas">Personas</a>
     <a href="#" class="nav-item" data-tab="stt">STT</a>
@@ -41,6 +42,7 @@
           <div class="status-row"><span>Enabled</span><span id="dash-rephrase" class="badge">--</span></div>
           <div class="status-row"><span>Persona</span><span id="dash-persona">--</span></div>
           <div class="status-row"><span>Model</span><span id="dash-rephrase-model">--</span></div>
+          <div class="status-row"><span>Completion</span><span id="dash-completion">--</span></div>
         </div>
         <div class="card">
           <h3>Input</h3>
@@ -91,6 +93,51 @@
       </div>
     </section>
 
+    <!-- Voice Studio -->
+    <section id="tab-studio" class="tab">
+      <h1>Voice Studio</h1>
+      <div class="card" style="margin-bottom: 1rem;">
+        <h3>Tips</h3>
+        <ul style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.8; padding-left: 1.25rem;">
+          <li>6-15 seconds of clean speech works best</li>
+          <li>One speaker, no background noise or music</li>
+          <li>WAV, MP3, FLAC, OGG supported</li>
+          <li>Multiple short clips are auto-combined</li>
+          <li>Max 30 seconds per individual file</li>
+        </ul>
+      </div>
+      <div class="card" style="margin-bottom: 1rem;">
+        <div class="form-group">
+          <label for="studio-name">Voice Name</label>
+          <input type="text" id="studio-name" placeholder="my-voice">
+        </div>
+        <div class="upload-zone" id="studio-upload-zone">
+          <input type="file" id="studio-file-input" accept="audio/*" multiple style="display:none;">
+          <p>Drop audio files here or <a href="#" id="studio-browse-link">browse</a></p>
+        </div>
+        <div id="studio-staged" style="margin-top: 1rem; display: none;">
+          <h3>Staged Files</h3>
+          <div id="studio-staged-list"></div>
+          <div class="studio-duration-row" style="margin-top: 0.75rem;">
+            <span style="font-size: 0.85rem; color: var(--text-muted);">Total:</span>
+            <span id="studio-total-duration" style="font-size: 0.85rem; font-weight: 600;">0.0s</span>
+            <div class="duration-bar">
+              <div class="duration-bar-fill" id="studio-duration-fill"></div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top: 1rem;">
+          <button id="studio-create-btn" class="btn btn-primary" disabled>Create Voice</button>
+          <button id="studio-clear-btn" class="btn btn-secondary" style="display:none;">Clear</button>
+        </div>
+        <div id="studio-status" class="test-output" style="display: none;"></div>
+      </div>
+      <div class="card">
+        <h3>Installed Voices</h3>
+        <div id="studio-voices-list"></div>
+      </div>
+    </section>
+
     <!-- Rephrase -->
     <section id="tab-rephrase" class="tab">
       <h1>Rephrase Settings</h1>
@@ -131,6 +178,38 @@
         </div>
         <button id="rephrase-test-btn" class="btn btn-secondary">Test Rephrase</button>
         <div id="rephrase-test-output" class="test-output"></div>
+      </div>
+      <div class="card" style="margin-top: 1rem;">
+        <h3>Completion Announcement</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          Speak when Claude's response is filtered (code-only, short technical output).
+          Persona mode generates a quip using the active persona; falls back to simple phrase if Ollama is unavailable.
+        </p>
+        <div class="form-group">
+          <label for="completion-mode">Mode</label>
+          <select id="completion-mode">
+            <option value="none">None (silent)</option>
+            <option value="simple">Simple phrase</option>
+            <option value="persona">Persona quip</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="completion-phrase">Simple Phrase</label>
+          <input type="text" id="completion-phrase" placeholder="Done.">
+        </div>
+        <div class="form-group">
+          <label for="completion-prefix">Persona Prefix</label>
+          <input type="text" id="completion-prefix" placeholder="e.g. New Achievement!">
+        </div>
+        <div class="form-group">
+          <label for="completion-temperature">Temperature</label>
+          <input type="number" id="completion-temperature" step="0.1" min="0.1" max="2.0">
+        </div>
+        <div class="btn-row">
+          <button id="completion-save" class="btn btn-primary">Save</button>
+          <button id="completion-test-btn" class="btn btn-secondary">Test Quip</button>
+        </div>
+        <div id="completion-test-output" class="test-output"></div>
       </div>
     </section>
 

@@ -8,12 +8,12 @@ import os
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from claudible.config import Config
 from claudible.hooks.installer import is_installed as hook_is_installed
-from claudible.rephrase.ollama import list_models, rephrase
+from claudible.rephrase.ollama import generate_completion_quip, list_models, rephrase
 from claudible.rephrase.personas import (
     get_persona_prompt,
     is_custom,
@@ -25,7 +25,15 @@ from claudible.stt.noise import (
     is_rnnoise_active,
     is_rnnoise_installed,
 )
-from claudible.tts.voices import get_voice_info, list_voices
+from claudible.paths import DATA_DIR, VOICES_DIR
+from claudible.tts.voices import (
+    combine_samples,
+    get_voice_info,
+    list_voices,
+    process_voice_sample,
+)
+
+STAGING_DIR = DATA_DIR / "voice-staging"
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +48,7 @@ class ConfigPatch(BaseModel):
     stt: dict | None = None
     rephrase: dict | None = None
     dictation: dict | None = None
+    completion: dict | None = None
 
 
 class PersonaBody(BaseModel):
@@ -64,7 +73,7 @@ async def get_config():
 
 @router.patch("/config/{section}")
 async def patch_config(section: str, body: dict):
-    if section not in ("tts", "stt", "rephrase", "dictation"):
+    if section not in ("tts", "stt", "rephrase", "dictation", "completion"):
         raise HTTPException(400, f"Unknown config section: {section}")
     cfg = Config.load()
     sub = getattr(cfg, section)
@@ -166,6 +175,135 @@ async def voice_test(name: str):
     )
     await _playback_queue.put((audio, sr))
     return {"ok": True}
+
+
+@router.delete("/voices/{name}")
+async def voice_delete(name: str):
+    """Delete an installed voice and its directory."""
+    voice_dir = VOICES_DIR / name
+    if not voice_dir.exists():
+        raise HTTPException(404, f"Voice '{name}' not found")
+    import shutil
+
+    shutil.rmtree(voice_dir)
+    return {"ok": True}
+
+
+# ── Voice Studio ───────────────────────────────────────────────────────
+
+
+def _get_file_duration(path: Path) -> float:
+    """Get audio file duration in seconds."""
+    import soundfile as sf
+
+    try:
+        info = sf.info(str(path))
+        return info.duration
+    except Exception:
+        return 0.0
+
+
+@router.post("/voice-studio/upload/{name}")
+async def studio_upload(name: str, files: list[UploadFile]):
+    """Upload audio file(s) to staging area."""
+    if not name.strip():
+        raise HTTPException(400, "Voice name is required")
+
+    staging = STAGING_DIR / name
+    staging.mkdir(parents=True, exist_ok=True)
+
+    result = []
+    for f in files:
+        if not f.filename:
+            continue
+        dest = staging / f.filename
+        content = await f.read()
+        dest.write_bytes(content)
+        duration = _get_file_duration(dest)
+        result.append({
+            "name": f.filename,
+            "duration": round(duration, 1),
+            "size_kb": round(len(content) / 1024, 1),
+        })
+
+    return result
+
+
+@router.get("/voice-studio/staging/{name}")
+async def studio_staging(name: str):
+    """List staged files for a voice name."""
+    staging = STAGING_DIR / name
+    if not staging.exists():
+        return []
+
+    result = []
+    for f in sorted(staging.iterdir()):
+        if f.is_file():
+            duration = _get_file_duration(f)
+            result.append({
+                "name": f.name,
+                "duration": round(duration, 1),
+                "size_kb": round(f.stat().st_size / 1024, 1),
+            })
+    return result
+
+
+@router.delete("/voice-studio/staging/{name}/{filename}")
+async def studio_staging_delete_file(name: str, filename: str):
+    """Remove a single staged file."""
+    target = STAGING_DIR / name / filename
+    if not target.exists():
+        raise HTTPException(404, "Staged file not found")
+    target.unlink()
+    return {"ok": True}
+
+
+@router.delete("/voice-studio/staging/{name}")
+async def studio_staging_clear(name: str):
+    """Clear all staged files for a voice name."""
+    staging = STAGING_DIR / name
+    if staging.exists():
+        import shutil
+
+        shutil.rmtree(staging)
+    return {"ok": True}
+
+
+@router.post("/voice-studio/create/{name}")
+async def studio_create(name: str):
+    """Process staged files into an installed voice."""
+    import asyncio
+
+    staging = STAGING_DIR / name
+    if not staging.exists():
+        raise HTTPException(400, "No staged files found")
+
+    staged = sorted(f for f in staging.iterdir() if f.is_file())
+    if not staged:
+        raise HTTPException(400, "No staged files found")
+
+    try:
+        if len(staged) == 1:
+            voice = await asyncio.to_thread(process_voice_sample, staged[0], name)
+        else:
+            voice = await asyncio.to_thread(
+                combine_samples, staged, name, target_duration=15.0
+            )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    # Clean up staging
+    import shutil
+
+    shutil.rmtree(staging)
+
+    # Return info about the created voice
+    try:
+        info = get_voice_info(name)
+    except Exception:
+        info = {"name": name, "path": str(voice.path)}
+
+    return info
 
 
 # ── Personas ────────────────────────────────────────────────────────────────
@@ -284,6 +422,23 @@ async def rephrase_test(body: RephraseTestBody):
     if body.persona:
         cfg.rephrase.persona = body.persona
     result = await rephrase(body.text, config=cfg)
+    return {"result": result}
+
+
+# ── Completion ─────────────────────────────────────────────────────────────
+
+
+@router.post("/completion/test")
+async def completion_test():
+    """Generate and return a completion quip without speaking."""
+    cfg = Config.load()
+    cfg.rephrase.enabled = True  # force enabled for test
+    quip = await generate_completion_quip(cfg)
+    if quip:
+        prefix = cfg.completion.persona_prefix.strip()
+        result = f"{prefix} {quip}".strip() if prefix else quip
+    else:
+        result = cfg.completion.simple_phrase
     return {"result": result}
 
 

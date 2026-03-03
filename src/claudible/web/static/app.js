@@ -86,6 +86,7 @@ async function loadDashboard() {
     document.getElementById("dash-rephrase").innerHTML = badge(c.rephrase.enabled, "bool");
     document.getElementById("dash-persona").textContent = c.rephrase.persona;
     document.getElementById("dash-rephrase-model").textContent = c.rephrase.model;
+    document.getElementById("dash-completion").textContent = c.completion?.mode || "none";
     document.getElementById("dash-input").innerHTML = badge(s.input_group, "bool");
     document.getElementById("dash-rnnoise").innerHTML = badge(s.rnnoise_active, "bool");
 
@@ -175,6 +176,253 @@ document.getElementById("voice-save").addEventListener("click", async () => {
   } catch (e) { toast("Save failed: " + e.message, false); }
 });
 
+/* ── Voice Studio ──────────────────────────────────────────────────────── */
+
+let studioStaged = [];
+let studioInstalledNames = new Set();
+
+async function loadStudio() {
+  const name = document.getElementById("studio-name").value.trim();
+  if (name) {
+    await loadStagedFiles(name);
+  }
+  await loadStudioVoices();
+  updateStudioCreateBtn();
+}
+
+async function loadStagedFiles(name) {
+  try {
+    studioStaged = await api("GET", `/voice-studio/staging/${encodeURIComponent(name)}`);
+  } catch (e) { studioStaged = []; }
+  renderStagedFiles();
+}
+
+function renderStagedFiles() {
+  const container = document.getElementById("studio-staged-list");
+  const section = document.getElementById("studio-staged");
+  const createBtn = document.getElementById("studio-create-btn");
+  const clearBtn = document.getElementById("studio-clear-btn");
+
+  if (studioStaged.length === 0) {
+    section.style.display = "none";
+    createBtn.disabled = true;
+    clearBtn.style.display = "none";
+    return;
+  }
+
+  section.style.display = "";
+  clearBtn.style.display = "";
+  container.innerHTML = "";
+
+  let totalDuration = 0;
+  studioStaged.forEach(f => {
+    totalDuration += f.duration;
+    const row = document.createElement("div");
+    row.className = "staged-file";
+    row.innerHTML =
+      `<span class="staged-file-name">${esc(f.name)}</span>` +
+      `<span class="staged-file-info">${f.duration}s</span>` +
+      `<span class="staged-file-info">${f.size_kb} KB</span>`;
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger btn-sm";
+    delBtn.textContent = "X";
+    delBtn.addEventListener("click", async () => {
+      const name = document.getElementById("studio-name").value.trim();
+      try {
+        await api("DELETE", `/voice-studio/staging/${encodeURIComponent(name)}/${encodeURIComponent(f.name)}`);
+        await loadStagedFiles(name);
+      } catch (e) { toast("Remove failed: " + e.message, false); }
+    });
+    row.appendChild(delBtn);
+    container.appendChild(row);
+  });
+
+  // Update total duration display
+  const totalEl = document.getElementById("studio-total-duration");
+  totalEl.textContent = totalDuration.toFixed(1) + "s";
+
+  const fill = document.getElementById("studio-duration-fill");
+  const pct = Math.min(totalDuration / 15, 1) * 100;
+  fill.style.width = pct + "%";
+  fill.className = "duration-bar-fill " + (totalDuration >= 6 ? "duration-ok" : "duration-short");
+
+  createBtn.disabled = totalDuration < 6;
+}
+
+function updateStudioCreateBtn() {
+  const name = document.getElementById("studio-name").value.trim();
+  const btn = document.getElementById("studio-create-btn");
+  const isReplace = name && studioInstalledNames.has(name);
+  btn.textContent = isReplace ? "Replace Voice" : "Create Voice";
+}
+
+async function loadStudioVoices() {
+  const container = document.getElementById("studio-voices-list");
+  try {
+    const voices = await api("GET", "/voices");
+    studioInstalledNames = new Set(voices.map(v => v.name));
+    if (voices.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-muted); font-size:0.85rem;">No voices installed.</p>';
+      return;
+    }
+    container.innerHTML = "";
+    voices.forEach(v => {
+      const row = document.createElement("div");
+      row.className = "staged-file";
+      row.innerHTML =
+        `<span class="staged-file-name">${esc(v.name)}</span>` +
+        `<span class="staged-file-info">${v.duration || "?"}s</span>`;
+
+      const testBtn = document.createElement("button");
+      testBtn.className = "btn btn-secondary btn-sm";
+      testBtn.textContent = "Test";
+      testBtn.addEventListener("click", async () => {
+        testBtn.disabled = true;
+        testBtn.textContent = "Playing...";
+        try {
+          await api("POST", `/voices/${encodeURIComponent(v.name)}/test`);
+          toast("Playing " + v.name + "...");
+        } catch (e) { toast("Test failed: " + e.message, false); }
+        testBtn.disabled = false;
+        testBtn.textContent = "Test";
+      });
+      row.appendChild(testBtn);
+
+      const replaceBtn = document.createElement("button");
+      replaceBtn.className = "btn btn-secondary btn-sm";
+      replaceBtn.textContent = "Replace";
+      replaceBtn.addEventListener("click", () => {
+        document.getElementById("studio-name").value = v.name;
+        updateStudioCreateBtn();
+        document.getElementById("studio-upload-zone").scrollIntoView({ behavior: "smooth" });
+      });
+      row.appendChild(replaceBtn);
+
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn btn-danger btn-sm";
+      delBtn.textContent = "Delete";
+      delBtn.addEventListener("click", async () => {
+        if (!confirm('Delete voice "' + v.name + '"?')) return;
+        try {
+          await api("DELETE", `/voices/${encodeURIComponent(v.name)}`);
+          toast("Voice deleted");
+          loadStudioVoices();
+          updateStudioCreateBtn();
+        } catch (e) { toast("Delete failed: " + e.message, false); }
+      });
+      row.appendChild(delBtn);
+
+      container.appendChild(row);
+    });
+  } catch (e) {
+    container.innerHTML = '<p style="color:var(--text-muted);">Failed to load voices.</p>';
+  }
+}
+
+// Upload handling
+const studioZone = document.getElementById("studio-upload-zone");
+const studioFileInput = document.getElementById("studio-file-input");
+
+document.getElementById("studio-name").addEventListener("input", () => {
+  updateStudioCreateBtn();
+});
+
+document.getElementById("studio-name").addEventListener("change", async () => {
+  const name = document.getElementById("studio-name").value.trim();
+  if (name) await loadStagedFiles(name);
+  updateStudioCreateBtn();
+});
+
+document.getElementById("studio-browse-link").addEventListener("click", e => {
+  e.preventDefault();
+  studioFileInput.click();
+});
+
+studioFileInput.addEventListener("change", () => {
+  if (studioFileInput.files.length > 0) uploadStudioFiles(studioFileInput.files);
+});
+
+studioZone.addEventListener("dragover", e => {
+  e.preventDefault();
+  studioZone.classList.add("upload-zone-active");
+});
+
+studioZone.addEventListener("dragleave", () => {
+  studioZone.classList.remove("upload-zone-active");
+});
+
+studioZone.addEventListener("drop", e => {
+  e.preventDefault();
+  studioZone.classList.remove("upload-zone-active");
+  if (e.dataTransfer.files.length > 0) uploadStudioFiles(e.dataTransfer.files);
+});
+
+async function uploadStudioFiles(fileList) {
+  const name = document.getElementById("studio-name").value.trim();
+  if (!name) { toast("Enter a voice name first", false); return; }
+
+  const formData = new FormData();
+  for (const f of fileList) formData.append("files", f);
+
+  try {
+    const resp = await fetch(`/api/voice-studio/upload/${encodeURIComponent(name)}`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || resp.statusText);
+    }
+    const result = await resp.json();
+    toast(`Uploaded ${result.length} file(s)`);
+    studioFileInput.value = "";
+    await loadStagedFiles(name);
+  } catch (e) { toast("Upload failed: " + e.message, false); }
+}
+
+// Create voice
+document.getElementById("studio-create-btn").addEventListener("click", async () => {
+  const name = document.getElementById("studio-name").value.trim();
+  if (!name) { toast("Enter a voice name first", false); return; }
+
+  const isReplace = studioInstalledNames.has(name);
+  if (isReplace && !confirm(`Voice "${name}" already exists. Replace it?`)) return;
+
+  const btn = document.getElementById("studio-create-btn");
+  const status = document.getElementById("studio-status");
+  btn.disabled = true;
+  btn.textContent = isReplace ? "Replacing..." : "Creating...";
+  status.style.display = "";
+  status.textContent = "Processing audio and " + (isReplace ? "replacing" : "creating") + " voice...";
+
+  try {
+    const info = await api("POST", `/voice-studio/create/${encodeURIComponent(name)}`);
+    status.textContent = `Voice "${info.name}" ${isReplace ? "replaced" : "created"} (${info.duration || "?"}s)`;
+    toast(isReplace ? "Voice replaced!" : "Voice created!");
+    studioStaged = [];
+    renderStagedFiles();
+    loadStudioVoices();
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    toast("Failed: " + e.message, false);
+  }
+  btn.disabled = false;
+  updateStudioCreateBtn();
+});
+
+// Clear staging
+document.getElementById("studio-clear-btn").addEventListener("click", async () => {
+  const name = document.getElementById("studio-name").value.trim();
+  if (!name) return;
+  try {
+    await api("DELETE", `/voice-studio/staging/${encodeURIComponent(name)}`);
+    studioStaged = [];
+    renderStagedFiles();
+    toast("Staging cleared");
+  } catch (e) { toast("Clear failed: " + e.message, false); }
+});
+
 /* ── Rephrase ──────────────────────────────────────────────────────────── */
 
 async function loadRephrase() {
@@ -200,6 +448,12 @@ async function loadRephrase() {
 
   // Fetch models into datalist
   await fetchModels(false);
+
+  // Completion settings
+  document.getElementById("completion-mode").value = cfg.completion?.mode || "none";
+  document.getElementById("completion-phrase").value = cfg.completion?.simple_phrase || "Done.";
+  document.getElementById("completion-prefix").value = cfg.completion?.persona_prefix || "";
+  document.getElementById("completion-temperature").value = cfg.completion?.temperature ?? 0.9;
 }
 
 async function fetchModels(showToast = true) {
@@ -245,6 +499,32 @@ document.getElementById("rephrase-test-btn").addEventListener("click", async () 
       text,
       persona: document.getElementById("rephrase-persona").value,
     });
+    out.textContent = res.result;
+  } catch (e) {
+    out.textContent = "Error: " + e.message;
+  }
+});
+
+/* ── Completion ────────────────────────────────────────────────────────── */
+
+document.getElementById("completion-save").addEventListener("click", async () => {
+  try {
+    await api("PATCH", "/config/completion", {
+      mode: document.getElementById("completion-mode").value,
+      simple_phrase: document.getElementById("completion-phrase").value,
+      persona_prefix: document.getElementById("completion-prefix").value,
+      temperature: parseFloat(document.getElementById("completion-temperature").value),
+    });
+    cfg = null;
+    toast("Completion settings saved");
+  } catch (e) { toast("Save failed: " + e.message, false); }
+});
+
+document.getElementById("completion-test-btn").addEventListener("click", async () => {
+  const out = document.getElementById("completion-test-output");
+  out.textContent = "Generating quip...";
+  try {
+    const res = await api("POST", "/completion/test");
     out.textContent = res.result;
   } catch (e) {
     out.textContent = "Error: " + e.message;
@@ -665,6 +945,7 @@ document.getElementById("logs-clear").addEventListener("click", () => {
 const loaders = {
   dashboard: loadDashboard,
   voice: loadVoice,
+  studio: loadStudio,
   rephrase: loadRephrase,
   personas: loadPersonas,
   stt: loadSTT,

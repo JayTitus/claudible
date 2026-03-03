@@ -47,6 +47,35 @@ async def _process(text: str) -> None:
     await client.speak(text, voice=cfg.tts.voice, language=cfg.tts.language, speed=cfg.tts.speed)
 
 
+async def _announce_completion() -> None:
+    """Speak a completion announcement when extract_speakable() filtered everything."""
+    from claudible.config import Config
+    from claudible.tts.client import TTSClient
+
+    cfg = Config.load()
+    if cfg.completion.mode == "none":
+        return
+
+    text = None
+
+    if cfg.completion.mode == "persona" and cfg.rephrase.enabled:
+        from claudible.rephrase.ollama import generate_completion_quip
+
+        quip = await generate_completion_quip(cfg)
+        if quip:
+            prefix = cfg.completion.persona_prefix.strip()
+            text = f"{prefix} {quip}".strip() if prefix else quip
+
+    if not text:
+        text = cfg.completion.simple_phrase
+
+    client = TTSClient(
+        base_url=f"http://{cfg.tts.host}:{cfg.tts.port}",
+        timeout=cfg.tts.speed * 30,
+    )
+    await client.speak(text, voice=cfg.tts.voice, language=cfg.tts.language, speed=cfg.tts.speed)
+
+
 def main() -> None:
     """Entry point for the stop hook."""
     from claudible.paths import TTS_MUTE_FLAG
@@ -68,6 +97,7 @@ def main() -> None:
 
         text = extract_speakable(text)
         if not text:
+            asyncio.run(_announce_completion())
             return
 
         # Truncate very long responses to keep TTS reasonable

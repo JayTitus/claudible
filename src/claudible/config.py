@@ -73,11 +73,20 @@ class RephraseConfig(BaseModel):
     persona_voices: dict[str, str] = Field(default_factory=dict)  # persona → voice name
 
 
+class CompletionConfig(BaseModel):
+    mode: str = "none"  # "none" / "simple" / "persona"
+    simple_phrase: str = "Done."
+    persona_prefix: str = ""
+    max_tokens: int = 60
+    temperature: float = 0.9
+
+
 class Config(BaseModel):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     dictation: DictationConfig = Field(default_factory=DictationConfig)
     rephrase: RephraseConfig = Field(default_factory=RephraseConfig)
+    completion: CompletionConfig = Field(default_factory=CompletionConfig)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
