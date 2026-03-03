@@ -143,8 +143,10 @@ def install_rnnoise(auto_yes: bool = False) -> bool:
         try:
             subprocess.run(
                 ["cmake", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release",
-                 "-DBUILD_VST_PLUGIN=OFF", "-DBUILD_LV2_PLUGIN=OFF",
-                 "-DBUILD_AU_PLUGIN=OFF",
+                 "-DBUILD_LADSPA_PLUGIN=ON",
+                 "-DBUILD_VST_PLUGIN=OFF", "-DBUILD_VST3_PLUGIN=OFF",
+                 "-DBUILD_LV2_PLUGIN=OFF", "-DBUILD_AU_PLUGIN=OFF",
+                 "-DBUILD_AUV3_PLUGIN=OFF", "-DBUILD_TESTS=OFF",
                  str(repo_dir)],
                 check=True, capture_output=True, text=True,
             )
