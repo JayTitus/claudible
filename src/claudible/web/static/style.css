@@ -394,6 +394,77 @@ textarea {
 }
 .nav-link-inline:hover { color: var(--accent-hover); }
 
+/* Upload zone */
+.upload-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.upload-zone:hover,
+.upload-zone-active {
+  border-color: var(--accent);
+  background: rgba(233,69,96,0.05);
+}
+
+.upload-zone a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Staged files */
+.staged-file {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border-radius: var(--radius);
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.staged-file-name {
+  flex: 1;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staged-file-info {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Duration bar */
+.studio-duration-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.duration-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.duration-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s, background 0.3s;
+}
+
+.duration-bar-fill.duration-ok { background: var(--green); }
+.duration-bar-fill.duration-short { background: var(--red); }
+
 /* Responsive */
 @media (max-width: 700px) {
   .sidebar {
