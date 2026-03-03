@@ -186,7 +186,8 @@ def enable_rnnoise() -> bool:
         return False
 
     PIPEWIRE_CONF_DIR.mkdir(parents=True, exist_ok=True)
-    conf = RNNOISE_PIPEWIRE_CONF.format(ladspa_so=LADSPA_SO)
+    # Use absolute path so PipeWire can find the plugin without LADSPA_PATH
+    conf = RNNOISE_PIPEWIRE_CONF.format(ladspa_so=str(so_path))
     PIPEWIRE_CONF_FILE.write_text(conf)
     log.info("Wrote PipeWire config: %s", PIPEWIRE_CONF_FILE)
 
