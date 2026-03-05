@@ -190,6 +190,106 @@ Option selection: say "select 2" or "option three" to type a number and press En
 | **Green** | Actively capturing speech |
 | **Red** | Error |
 
+## Audio Best Practices
+
+Getting clean speech recognition in a real-world environment takes some tuning. Here's what works.
+
+### Headset Recommendations
+
+A **multi-device Bluetooth headset with a hardware switch** is ideal for multi-machine setups. You can pair it to 2-3 machines and flip between them without re-pairing. Look for headsets that support **multipoint Bluetooth** (simultaneous connection to 2+ devices).
+
+For STT quality, a **boom mic headset** dramatically outperforms webcam or desk microphones — the mic is 2-3 cm from your mouth, which gives 20-30 dB better signal-to-noise ratio than a desk mic at arm's length. This alone eliminates most background noise issues.
+
+If you prefer a desk mic, use a **cardioid** (directional) microphone aimed at your mouth with the null (rear rejection) pointed toward noise sources (keyboard, TV, speakers).
+
+### Bluetooth Audio Notes
+
+Bluetooth audio has inherent latency (~150-200ms). If TTS speech is clipped at the start, increase the audio lead-in:
+
+```toml
+[tts]
+audio_lead_in_ms = 250  # default 150, try 250-300 for Bluetooth
+```
+
+For better codec quality, switch from SBC to SBC-XQ if your headset supports it:
+```bash
+pactl set-card-profile bluez_card.YOUR_DEVICE_ID a2dp-sink-sbc_xq
+```
+
+**Important**: Bluetooth headsets in HFP/HSP mode (headset profile with mic) drop to extremely low audio quality (8kHz CVSD). Use the headset mic for STT input but keep audio output on A2DP (high quality) if possible. Some headsets handle this automatically with multipoint; others require manual profile switching.
+
+### Reducing Keyboard and Desk Vibration
+
+Mechanical keyboards transmit vibrations through the desk surface to nearby microphones. These appear as short low-frequency thumps that VOSK often recognizes as "the" or other short words.
+
+**Physical fixes** (most effective):
+- **Desk mat** under the keyboard absorbs vibration before it reaches the mic
+- **Shock mount** or **isolation pad** under the mic stand decouples it from the desk
+- **Boom arm** mounted to the desk edge (separate from the keyboard surface) eliminates the structural path entirely
+- A headset mic avoids desk vibration entirely
+
+**Software fixes**:
+- Enable **RNNoise** noise suppression in the STT tab (already built into claudible)
+- Tune the RNNoise **VAD threshold** higher (70-80%) in your PipeWire filter config to reject more transient noise
+- Add a **high-pass filter** at 100-120 Hz to remove low-frequency desk rumble — keyboard impacts are primarily 80-200 Hz
+
+### Background Noise and Open Mic
+
+For always-listening mode in noisy environments (TV, music, other people), noise management becomes critical.
+
+**The noise filtering pipeline** (in order of processing):
+
+1. **Acoustic Echo Cancellation (AEC)** — prevents your own TTS output from being picked up by the mic. PipeWire has a built-in echo cancel module using the WebRTC algorithm:
+
+   Create `~/.config/pipewire/pipewire.conf.d/99-echo-cancel.conf`:
+   ```
+   context.modules = [
+     {
+       name = libpipewire-module-echo-cancel
+       args = {
+         library.name  = aec/libspa-aec-webrtc
+         aec.args = {
+           webrtc.extended_filter    = true
+           webrtc.high_pass_filter   = true
+           webrtc.noise_suppression  = true
+         }
+         source.props = {
+           node.name = "echo-cancel-source"
+           node.description = "Echo-Cancelled Mic"
+         }
+       }
+     }
+   ]
+   ```
+   Then point nerd-dictation at `echo-cancel-source` as the PulseAudio device. This is the single biggest improvement for setups where TTS plays through speakers (not headphones).
+
+2. **RNNoise** — neural network noise suppression (already supported, toggle in STT tab). Excellent at removing steady-state noise (fans, AC, hum) and moderate at transient noise (clicks, taps).
+
+3. **Noise gate** — silences audio below an amplitude threshold. Stacking a noise gate after RNNoise is effective: RNNoise reduces the noise floor, then the gate handles the residual. The `ZamGate` LADSPA plugin (`zam-plugins` package) works well in a PipeWire filter chain.
+
+**Tips for open mic with background TV/music**:
+- Use **wake word mode** — the mic only processes speech after the trigger word, ignoring everything else
+- Position the mic as close to your mouth as practical (headset > clip mic > desk mic)
+- Point a cardioid mic's null toward the TV/speakers
+- If TV audio routes through PipeWire, AEC can subtract it automatically
+- VOSK's recognition of background TV speech tends to produce low-confidence single-word results — the wake word requirement naturally filters these out
+
+**How Alexa handles this**: Smart speakers use 7-microphone circular arrays with hardware beamforming to spatially focus on the speaker's direction and null out noise sources. They run AEC to subtract their own speaker output, then neural noise suppression, then Voice Activity Detection (VAD) to gate frames before the speech recognizer. The entire DSP pipeline runs on a custom chip. For a single desktop mic, we can't do beamforming, but AEC + RNNoise + wake word gets surprisingly close.
+
+### Recommended Audio Chain
+
+For the best experience, stack these in order:
+
+```
+Microphone
+  → PipeWire Echo Cancel (AEC — subtract TTS output)
+  → RNNoise filter-chain (neural noise suppression)
+  → nerd-dictation (VOSK speech recognition)
+  → claudible callback (wake word gate → window routing)
+```
+
+For headset users, AEC is less critical (your mic doesn't pick up speaker output), but RNNoise still helps with ambient noise.
+
 ## Personas
 
 Claudible ships with 12 built-in personas that rephrase Claude's output before speaking:
