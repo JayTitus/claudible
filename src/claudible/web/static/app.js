@@ -736,6 +736,10 @@ async function loadSTT() {
   document.getElementById("stt-window-lock-enabled").checked = cfg.stt.window_lock_enabled ?? true;
   document.getElementById("stt-watched-processes").value = (cfg.stt.watched_processes || ["claude", "codex", "gemini"]).join(", ");
   document.getElementById("stt-watch-interval").value = cfg.stt.process_watch_interval ?? 2.0;
+  document.getElementById("stt-rnnoise-vad").value = cfg.stt.rnnoise_vad_threshold ?? 70;
+  document.getElementById("stt-rnnoise-grace").value = cfg.stt.rnnoise_vad_grace_ms ?? 200;
+  document.getElementById("stt-rnnoise-retro").value = cfg.stt.rnnoise_retroactive_ms ?? 100;
+  document.getElementById("stt-echo-cancel").checked = cfg.stt.echo_cancellation ?? false;
 
   // Load window slots
   await loadWindowSlots();
@@ -940,12 +944,35 @@ document.getElementById("stt-save").addEventListener("click", async () => {
         window_lock_enabled: document.getElementById("stt-window-lock-enabled").checked,
         watched_processes: document.getElementById("stt-watched-processes").value.split(",").map(s => s.trim()).filter(Boolean),
         process_watch_interval: parseFloat(document.getElementById("stt-watch-interval").value) || 2.0,
+        rnnoise_vad_threshold: parseInt(document.getElementById("stt-rnnoise-vad").value) || 70,
+        rnnoise_vad_grace_ms: parseInt(document.getElementById("stt-rnnoise-grace").value) || 200,
+        rnnoise_retroactive_ms: parseInt(document.getElementById("stt-rnnoise-retro").value) || 100,
+        echo_cancellation: document.getElementById("stt-echo-cancel").checked,
       }),
       api("PATCH", "/config/dictation", {
         keywords: currentKeywords,
       }),
     ]);
     cfg = null;
+
+    // Update RNNoise filter config if active
+    try {
+      const noise = await api("GET", "/noise");
+      if (noise.active) {
+        await api("POST", "/noise/enable");  // re-deploys with new thresholds
+      }
+    } catch (e) { /* ignore */ }
+
+    // Toggle AEC based on checkbox
+    try {
+      const aecEnabled = document.getElementById("stt-echo-cancel").checked;
+      const noise = await api("GET", "/noise");
+      if (aecEnabled && !noise.aec_active) {
+        await api("POST", "/noise/aec/enable");
+      } else if (!aecEnabled && noise.aec_active) {
+        await api("POST", "/noise/aec/disable");
+      }
+    } catch (e) { /* ignore */ }
 
     // Restart STT key listener to pick up new settings
     try {

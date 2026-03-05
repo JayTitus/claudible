@@ -367,6 +367,29 @@
           <button id="stt-noise-disable" class="btn btn-secondary">Disable RNNoise Filter</button>
         </div>
         <div id="stt-noise-install-status" class="test-output" style="display:none;"></div>
+        <div class="form-group" style="margin-top:0.75rem;">
+          <label for="stt-rnnoise-vad">RNNoise VAD Threshold (%)</label>
+          <input type="number" id="stt-rnnoise-vad" min="0" max="99" step="5" placeholder="70">
+          <small>Higher = more aggressive noise rejection. Default 50, recommended 70 for keyboard/ambient noise.</small>
+        </div>
+        <div class="form-group">
+          <label for="stt-rnnoise-grace">VAD Grace Period (ms)</label>
+          <input type="number" id="stt-rnnoise-grace" min="0" max="1000" step="50" placeholder="200">
+          <small>How long after voice stops before silence gate activates.</small>
+        </div>
+        <div class="form-group">
+          <label for="stt-rnnoise-retro">Retroactive VAD Grace (ms)</label>
+          <input type="number" id="stt-rnnoise-retro" min="0" max="500" step="25" placeholder="100">
+          <small>Include audio just before voice was detected. Prevents clipping word starts.</small>
+        </div>
+
+        <h3 style="margin-top:1.25rem;">Echo Cancellation</h3>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="stt-echo-cancel"> Enable Acoustic Echo Cancellation (AEC)
+          </label>
+          <small>Prevents TTS output from feeding back into the microphone. Uses PipeWire WebRTC AEC. Requires PipeWire restart.</small>
+        </div>
         <button id="stt-save" class="btn btn-primary" style="margin-top: 1rem;">Save</button>
       </div>
     </section>

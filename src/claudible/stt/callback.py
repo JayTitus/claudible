@@ -213,9 +213,12 @@ def _write_wake_state(state: str, activated_at: float = 0.0, persona: str = "", 
 
 
 def _check_trigger(text: str) -> tuple:
-    """Check if text contains a trigger word.
+    """Check if text starts with a trigger word.
 
     Returns (remainder_text, persona_name, slot) if trigger found, else ("", "", "").
+    Trigger must appear at the START of the text (or start of the combined
+    lookback + current chunk) to avoid false activations from common words
+    like "system" appearing mid-sentence.
     Slot is parsed from number word after trigger: "jarvis two" → slot "2".
     Uses _last_chunk for lookback on multi-word triggers split across chunks.
     """
@@ -227,17 +230,15 @@ def _check_trigger(text: str) -> tuple:
         found = False
         remainder = ""
 
-        # Direct match: trigger appears in current chunk
-        if trigger_lower in lower:
-            idx = lower.index(trigger_lower)
-            remainder = text[idx + len(trigger_lower):].strip()
+        # Direct match: trigger at start of current chunk
+        if lower.startswith(trigger_lower):
+            remainder = text.strip()[len(trigger_lower):].strip()
             found = True
-        # Lookback: trigger split across previous + current chunk
+        # Lookback: trigger split across previous + current chunk (at start)
         elif _last_chunk:
             combined = (_last_chunk + " " + lower).strip()
-            if trigger_lower in combined:
-                idx = combined.index(trigger_lower)
-                remainder = combined[idx + len(trigger_lower):].strip()
+            if combined.startswith(trigger_lower):
+                remainder = combined[len(trigger_lower):].strip()
                 found = True
 
         if found:

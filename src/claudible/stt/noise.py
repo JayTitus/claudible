@@ -36,7 +36,9 @@ context.modules = [
                         plugin = {ladspa_so}
                         label  = noise_suppressor_mono
                         control = {{
-                            "VAD Threshold (%)" = 50.0
+                            "VAD Threshold (%)" = {vad_threshold}
+                            "VAD Grace Period (ms)" = {vad_grace_ms}
+                            "Retroactive VAD Grace (ms)" = {retroactive_ms}
                         }}
                     }}
                 ]
@@ -53,6 +55,43 @@ context.modules = [
             }}
         }}
     }}
+]
+"""
+
+# PipeWire echo cancellation config
+AEC_PIPEWIRE_CONF_DIR = Path.home() / ".config" / "pipewire" / "pipewire.conf.d"
+AEC_PIPEWIRE_CONF_FILE = AEC_PIPEWIRE_CONF_DIR / "99-echo-cancel.conf"
+AEC_PIPEWIRE_CONF = """\
+# Claudible Acoustic Echo Cancellation
+# Prevents TTS output from feeding back into the STT microphone.
+# Use "echo-cancel-source" as the nerd-dictation pulse device.
+context.modules = [
+  {
+    name = libpipewire-module-echo-cancel
+    args = {
+      library.name  = aec/libspa-aec-webrtc
+      aec.args = {
+        webrtc.extended_filter    = true
+        webrtc.high_pass_filter   = true
+        webrtc.noise_suppression  = true
+        webrtc.gain_control       = false
+        webrtc.voice_detection    = false
+      }
+      capture.props = {
+        node.name = "echo-cancel-capture"
+      }
+      source.props = {
+        node.name = "echo-cancel-source"
+        node.description = "Echo-Cancelled Mic"
+      }
+      sink.props = {
+        node.name = "echo-cancel-sink"
+      }
+      playback.props = {
+        node.name = "echo-cancel-playback"
+      }
+    }
+  }
 ]
 """
 
@@ -178,7 +217,7 @@ def install_rnnoise(auto_yes: bool = False) -> bool:
         return True
 
 
-def enable_rnnoise() -> bool:
+def enable_rnnoise(vad_threshold: int = 70, vad_grace_ms: int = 200, retroactive_ms: int = 100) -> bool:
     """Deploy PipeWire filter-chain config and restart the service."""
     so_path = get_rnnoise_path()
     if not so_path:
@@ -187,7 +226,12 @@ def enable_rnnoise() -> bool:
 
     PIPEWIRE_CONF_DIR.mkdir(parents=True, exist_ok=True)
     # Use absolute path so PipeWire can find the plugin without LADSPA_PATH
-    conf = RNNOISE_PIPEWIRE_CONF.format(ladspa_so=str(so_path))
+    conf = RNNOISE_PIPEWIRE_CONF.format(
+        ladspa_so=str(so_path),
+        vad_threshold=float(vad_threshold),
+        vad_grace_ms=float(vad_grace_ms),
+        retroactive_ms=float(retroactive_ms),
+    )
     PIPEWIRE_CONF_FILE.write_text(conf)
     log.info("Wrote PipeWire config: %s", PIPEWIRE_CONF_FILE)
 
@@ -234,4 +278,53 @@ def disable_rnnoise() -> bool:
     )
 
     log.info("RNNoise filter disabled")
+    return True
+
+
+def is_aec_active() -> bool:
+    """Check if PipeWire AEC echo-cancel-source exists."""
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "sources", "short"],
+            stderr=subprocess.DEVNULL, timeout=5,
+        ).decode()
+        return "echo-cancel-source" in out
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+
+
+def enable_aec() -> bool:
+    """Deploy PipeWire echo cancellation config and restart."""
+    # Check if WebRTC AEC library exists
+    aec_paths = [
+        Path("/usr/lib/spa-0.2/aec/libspa-aec-webrtc.so"),
+        Path("/usr/lib/x86_64-linux-gnu/spa-0.2/aec/libspa-aec-webrtc.so"),
+    ]
+    if not any(p.exists() for p in aec_paths):
+        log.error("WebRTC AEC library not found — install pipewire-spa-plugins")
+        return False
+
+    AEC_PIPEWIRE_CONF_DIR.mkdir(parents=True, exist_ok=True)
+    AEC_PIPEWIRE_CONF_FILE.write_text(AEC_PIPEWIRE_CONF)
+    log.info("Wrote AEC config: %s", AEC_PIPEWIRE_CONF_FILE)
+
+    subprocess.run(
+        ["systemctl", "--user", "restart", "pipewire"],
+        capture_output=True, text=True,
+    )
+    log.info("AEC echo cancellation enabled")
+    return True
+
+
+def disable_aec() -> bool:
+    """Remove PipeWire echo cancellation config and restart."""
+    if AEC_PIPEWIRE_CONF_FILE.exists():
+        AEC_PIPEWIRE_CONF_FILE.unlink()
+        log.info("Removed AEC config: %s", AEC_PIPEWIRE_CONF_FILE)
+
+    subprocess.run(
+        ["systemctl", "--user", "restart", "pipewire"],
+        capture_output=True, text=True,
+    )
+    log.info("AEC echo cancellation disabled")
     return True

@@ -49,6 +49,10 @@ class STTConfig(BaseModel):
     hold_mode: bool = True
     toggle_key: str = "KEY_SCROLLLOCK"
     noise_suppression: bool = False
+    rnnoise_vad_threshold: int = 70  # RNNoise VAD threshold (0-99, higher = more aggressive)
+    rnnoise_vad_grace_ms: int = 200  # Grace period after VAD drops before silence gate
+    rnnoise_retroactive_ms: int = 100  # Include audio just before VAD triggered
+    echo_cancellation: bool = False
     wakeword_enabled: bool = False
     wakeword_timeout: float = 15.0
     window_lock_enabled: bool = True

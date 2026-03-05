@@ -20,8 +20,11 @@ from claudible.rephrase.personas import (
     list_personas,
 )
 from claudible.stt.noise import (
+    disable_aec,
     disable_rnnoise,
+    enable_aec,
     enable_rnnoise,
+    is_aec_active,
     is_rnnoise_active,
     is_rnnoise_installed,
 )
@@ -528,18 +531,36 @@ async def noise_status():
     return {
         "installed": is_rnnoise_installed(),
         "active": is_rnnoise_active(),
+        "aec_active": is_aec_active(),
     }
 
 
 @router.post("/noise/enable")
 async def noise_enable():
-    ok = enable_rnnoise()
+    cfg = Config.load()
+    ok = enable_rnnoise(
+        vad_threshold=cfg.stt.rnnoise_vad_threshold,
+        vad_grace_ms=cfg.stt.rnnoise_vad_grace_ms,
+        retroactive_ms=cfg.stt.rnnoise_retroactive_ms,
+    )
     return {"ok": ok}
 
 
 @router.post("/noise/disable")
 async def noise_disable():
     ok = disable_rnnoise()
+    return {"ok": ok}
+
+
+@router.post("/noise/aec/enable")
+async def aec_enable():
+    ok = enable_aec()
+    return {"ok": ok}
+
+
+@router.post("/noise/aec/disable")
+async def aec_disable():
+    ok = disable_aec()
     return {"ok": ok}
 
 
