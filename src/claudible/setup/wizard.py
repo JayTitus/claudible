@@ -164,7 +164,7 @@ def _step_test_voice(voice_name: str | None) -> None:
 
     if not healthy:
         click.echo("  TTS server not running. Skipping voice test.")
-        click.echo("  Start the server with: claudible server")
+        click.echo("  Start the server with: claudible start")
         return
 
     click.echo(f"  Testing voice '{voice_name}'...")
@@ -276,7 +276,7 @@ def _step_install_daemon(auto_yes: bool) -> None:
         "Install claudible as a systemd daemon? (starts on login)", default=True
     ):
         # Reuse the daemon install logic from CLI
-        from claudible.cli import _find_cudnn_lib
+        from claudible.paths import find_cudnn_lib
 
         import importlib.resources
 
@@ -287,7 +287,7 @@ def _step_install_daemon(auto_yes: bool) -> None:
         ref = importlib.resources.files("claudible.systemd").joinpath("claudible.service")
         service_text = ref.read_text(encoding="utf-8")
 
-        cudnn_path = _find_cudnn_lib()
+        cudnn_path = find_cudnn_lib()
         if cudnn_path:
             lines = service_text.splitlines()
             insert_idx = None
@@ -305,7 +305,7 @@ def _step_install_daemon(auto_yes: bool) -> None:
         subprocess.run(["systemctl", "--user", "start", "claudible"], check=True)
         click.echo(click.style("  Daemon installed, enabled, and started.", fg="green"))
     else:
-        click.echo("  Skipped. Install later with: claudible daemon install")
+        click.echo("  Skipped. Start manually with: claudible start")
 
 
 def _step_summary(voice_name: str | None, ptt_key: str, toggle_key: str) -> None:
@@ -326,8 +326,8 @@ def _step_summary(voice_name: str | None, ptt_key: str, toggle_key: str) -> None
     click.echo(f"    Hook:        {'installed' if is_installed() else 'not installed'}")
     click.echo()
     click.echo("  Useful commands:")
-    click.echo("    claudible daemon status    # check daemon")
-    click.echo("    claudible daemon logs      # view logs")
+    click.echo("    claudible                  # check status")
+    click.echo("    claudible stop             # stop server")
     click.echo("    claudible speak 'Hello'    # test speech")
     click.echo("    claudible voices list      # manage voices")
 
@@ -366,6 +366,15 @@ def run_wizard(auto_yes: bool = False, skip_gpu: bool = False) -> None:
     cfg.stt.toggle_key = toggle_key
     cfg.save()
     click.echo(click.style("\n  Config saved.", fg="green"))
+
+    # Generate nerd-dictation callback script
+    try:
+        from claudible.stt.callback import generate_callback
+
+        generate_callback(cfg)
+        click.echo("  nerd-dictation callback generated.")
+    except Exception:
+        pass
 
     # Step 5: Test voice
     if not auto_yes:

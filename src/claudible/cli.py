@@ -34,11 +34,14 @@ def _status() -> None:
     """Show claudible status overview."""
     from claudible.config import Config
     from claudible.hooks.installer import is_installed
+    from claudible.lifecycle import is_running, read_pid
     from claudible.tts.voices import list_voices
 
     cfg = Config.load()
     voices = list_voices()
     hook_ok = is_installed()
+    pid = read_pid()
+    running = is_running()
 
     click.echo(f"claudible v{__version__}")
     click.echo(f"  TTS server:  {cfg.tts.host}:{cfg.tts.port}")
@@ -47,6 +50,11 @@ def _status() -> None:
     click.echo(f"  Voices:      {len(voices)} installed")
     click.echo(f"  Rephrase:    {'on' if cfg.rephrase.enabled else 'off'}")
     click.echo(f"  Hook:        {'installed' if hook_ok else 'not installed'}")
+
+    if running:
+        click.echo(f"  Process:     running (PID {pid})")
+    else:
+        click.echo("  Process:     not running")
 
     # Quick health check
     from claudible.tts.client import TTSClient
@@ -57,36 +65,49 @@ def _status() -> None:
 
 
 @main.command()
-@click.option("--no-server", is_flag=True, help="Skip starting the TTS server")
-def run(no_server: bool) -> None:
-    """Start everything — TTS server + system tray."""
+def start() -> None:
+    """Start the TTS server + system tray."""
     import threading
 
     from claudible.config import Config
+    from claudible.lifecycle import is_running, read_pid, write_pid
 
+    if is_running():
+        pid = read_pid()
+        click.echo(f"Claudible is already running (PID {pid}).")
+        sys.exit(0)
+
+    write_pid()
     cfg = Config.load()
 
-    if not no_server:
-        # Check if server is already running
-        from claudible.tts.client import TTSClient
+    # Ensure nerd-dictation callback is current
+    try:
+        from claudible.stt.callback import generate_callback
 
-        client = TTSClient(base_url=f"http://{cfg.tts.host}:{cfg.tts.port}")
-        already_running = asyncio.run(client.health())
+        generate_callback(cfg)
+    except Exception:
+        pass
 
-        if already_running:
-            click.echo(f"TTS server already running on {cfg.tts.host}:{cfg.tts.port}")
-        else:
-            click.echo(f"Starting TTS server on {cfg.tts.host}:{cfg.tts.port} ...")
+    # Check if server is already running (e.g. started externally)
+    from claudible.tts.client import TTSClient
 
-            def _run_server() -> None:
-                import uvicorn
+    client = TTSClient(base_url=f"http://{cfg.tts.host}:{cfg.tts.port}")
+    already_running = asyncio.run(client.health())
 
-                from claudible.tts.server import app
+    if already_running:
+        click.echo(f"TTS server already running on {cfg.tts.host}:{cfg.tts.port}")
+    else:
+        click.echo(f"Starting TTS server on {cfg.tts.host}:{cfg.tts.port} ...")
 
-                uvicorn.run(app, host=cfg.tts.host, port=cfg.tts.port, log_level="warning")
+        def _run_server() -> None:
+            import uvicorn
 
-            t = threading.Thread(target=_run_server, daemon=True)
-            t.start()
+            from claudible.tts.server import app
+
+            uvicorn.run(app, host=cfg.tts.host, port=cfg.tts.port, log_level="warning")
+
+        t = threading.Thread(target=_run_server, daemon=True)
+        t.start()
 
     # Pre-generate icons BEFORE pystray import to avoid Pillow/GTK conflict on KDE
     try:
@@ -108,15 +129,69 @@ def run(no_server: bool) -> None:
 
 
 @main.command()
-@click.option("--host", default=None, help="Bind host")
-@click.option("--port", default=None, type=int, help="Bind port")
-def server(host: str | None, port: int | None) -> None:
-    """Start the TTS server."""
+def stop() -> None:
+    """Stop the running claudible process."""
     from claudible.config import Config
-    from claudible.tts.server import run_server
+    from claudible.lifecycle import is_running, stop_running
+    from claudible.tts.client import TTSClient
 
-    cfg = Config.load()
-    run_server(host=host or cfg.tts.host, port=port or cfg.tts.port)
+    if not is_running():
+        click.echo("Claudible is not running.")
+        sys.exit(0)
+
+    stopped = stop_running()
+    if stopped:
+        click.echo("Claudible stopped.")
+    else:
+        # Fallback: try /shutdown endpoint
+        cfg = Config.load()
+        client = TTSClient(base_url=f"http://{cfg.tts.host}:{cfg.tts.port}")
+        try:
+            import httpx
+
+            httpx.post(f"http://{cfg.tts.host}:{cfg.tts.port}/shutdown", timeout=5)
+            click.echo("Claudible stopped via server shutdown.")
+        except Exception:
+            click.echo("Failed to stop claudible.", err=True)
+            sys.exit(1)
+
+
+@main.command()
+@click.pass_context
+def restart(ctx: click.Context) -> None:
+    """Restart claudible (stop + start via systemd or background process)."""
+    import shutil
+    import subprocess
+    import time
+
+    from claudible.lifecycle import is_running
+
+    if is_running():
+        ctx.invoke(stop)
+        time.sleep(1)
+
+    # Prefer systemd if the service is available
+    if shutil.which("systemctl"):
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "is-enabled", "claudible"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                subprocess.run(["systemctl", "--user", "start", "claudible"], check=True)
+                click.echo("Claudible started via systemd.")
+                return
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+    # Fallback: launch in background
+    subprocess.Popen(
+        [sys.executable, "-m", "claudible.cli", "start"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    click.echo("Claudible restarted in background.")
 
 
 @main.command()
@@ -333,6 +408,59 @@ def personas_delete(name: str) -> None:
 
 
 @main.group()
+def windows() -> None:
+    """Manage window lock slots for dictation."""
+
+
+@windows.command("list")
+def windows_list() -> None:
+    """Show registered window slots with alive status."""
+    from claudible.stt.windows import read_window_state, validate_window
+
+    state = read_window_state()
+    wins = state.get("windows", {})
+    if not wins:
+        click.echo("  No windows registered.")
+        return
+    for slot, entry in sorted(wins.items()):
+        wid = entry.get("window_id")
+        title = entry.get("title", "")
+        pid = entry.get("pid")
+        process = entry.get("process")
+        alive = validate_window(wid) if wid else False
+        status = click.style("alive", fg="green") if alive else click.style("gone", fg="red")
+        if process:
+            source = f"{process} (PID {pid})"
+        else:
+            source = "(manual)"
+        click.echo(f"  Slot {slot}: {wid} ({title}) [{status}] {source}")
+
+
+@windows.command("register")
+@click.argument("slot", default="1")
+def windows_register(slot: str) -> None:
+    """Register the focused window to a slot (default: 1)."""
+    from claudible.stt.windows import register_window
+
+    try:
+        state = register_window(slot)
+        entry = state.get("windows", {}).get(slot, {})
+        click.echo(f"Registered slot {slot}: {entry.get('window_id')} ({entry.get('title', '')})")
+    except RuntimeError as e:
+        click.echo(f"Failed: {e}", err=True)
+        sys.exit(1)
+
+
+@windows.command("clear")
+def windows_clear() -> None:
+    """Clear all window registrations."""
+    from claudible.stt.windows import clear_all_windows
+
+    clear_all_windows()
+    click.echo("All window registrations cleared.")
+
+
+@main.group()
 def hooks() -> None:
     """Manage Claude Code hooks."""
 
@@ -366,124 +494,6 @@ def hooks_status() -> None:
         click.echo("Claudible hook is NOT installed.")
 
 
-@main.group()
-def daemon() -> None:
-    """Manage the claudible systemd user service."""
-
-
-@daemon.command("install")
-def daemon_install() -> None:
-    """Install and enable the systemd user service."""
-    import importlib.resources
-    import shutil
-
-    service_dest = Path.home() / ".config" / "systemd" / "user"
-    service_dest.mkdir(parents=True, exist_ok=True)
-    dest_file = service_dest / "claudible.service"
-
-    # Read the bundled service file
-    ref = importlib.resources.files("claudible.systemd").joinpath("claudible.service")
-    service_text = ref.read_text(encoding="utf-8")
-
-    # Auto-detect nvidia-cudnn library path for LD_LIBRARY_PATH
-    cudnn_path = _find_cudnn_lib()
-    if cudnn_path:
-        # Insert LD_LIBRARY_PATH line after the last Environment= line
-        lines = service_text.splitlines()
-        insert_idx = None
-        for i, line in enumerate(lines):
-            if line.startswith("Environment="):
-                insert_idx = i + 1
-        if insert_idx is not None:
-            lines.insert(insert_idx, f"Environment=LD_LIBRARY_PATH={cudnn_path}")
-            service_text = "\n".join(lines) + "\n"
-        click.echo(f"  Detected cuDNN: {cudnn_path}")
-
-    dest_file.write_text(service_text, encoding="utf-8")
-    click.echo(f"  Service file written to {dest_file}")
-
-    # Reload and enable
-    import subprocess
-
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "--user", "enable", "claudible"], check=True)
-    click.echo("  Service enabled. Run 'claudible daemon start' to start it.")
-
-
-def _find_cudnn_lib() -> str | None:
-    """Find the nvidia-cudnn library path inside the current Python environment."""
-    try:
-        import nvidia.cudnn
-
-        # nvidia.cudnn may be a namespace package (__file__ is None), use __path__ instead
-        for p in getattr(nvidia.cudnn, "__path__", []):
-            cudnn_dir = Path(p) / "lib"
-            if cudnn_dir.is_dir():
-                return str(cudnn_dir)
-    except ImportError:
-        pass
-    # Fallback: search site-packages
-    for p in sys.path:
-        candidate = Path(p) / "nvidia" / "cudnn" / "lib"
-        if candidate.is_dir():
-            return str(candidate)
-    return None
-
-
-@daemon.command("uninstall")
-def daemon_uninstall() -> None:
-    """Disable and remove the systemd user service."""
-    import subprocess
-
-    subprocess.run(
-        ["systemctl", "--user", "disable", "--now", "claudible"],
-        check=False,
-    )
-    service_file = Path.home() / ".config" / "systemd" / "user" / "claudible.service"
-    if service_file.exists():
-        service_file.unlink()
-        click.echo("  Service file removed.")
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    click.echo("  Service uninstalled.")
-
-
-@daemon.command("start")
-def daemon_start() -> None:
-    """Start the claudible service."""
-    import subprocess
-
-    subprocess.run(["systemctl", "--user", "start", "claudible"], check=True)
-    click.echo("claudible service started.")
-
-
-@daemon.command("stop")
-def daemon_stop() -> None:
-    """Stop the claudible service."""
-    import subprocess
-
-    subprocess.run(["systemctl", "--user", "stop", "claudible"], check=True)
-    click.echo("claudible service stopped.")
-
-
-@daemon.command("status")
-def daemon_status() -> None:
-    """Show the service status."""
-    import subprocess
-
-    subprocess.run(["systemctl", "--user", "status", "claudible"], check=False)
-
-
-@daemon.command("logs")
-def daemon_logs() -> None:
-    """Follow the service logs (Ctrl+C to stop)."""
-    import subprocess
-
-    subprocess.run(
-        ["journalctl", "--user", "-u", "claudible", "-f", "--no-hostname"],
-        check=False,
-    )
-
-
 @main.command()
 @click.option("--yes", "-y", is_flag=True, help="Non-interactive mode (auto-accept prompts)")
 @click.option("--skip-gpu", is_flag=True, help="Skip GPU/CUDA checks")
@@ -492,40 +502,6 @@ def install(yes: bool, skip_gpu: bool) -> None:
     from claudible.setup.wizard import run_wizard
 
     run_wizard(auto_yes=yes, skip_gpu=skip_gpu)
-
-
-@main.command()
-def tui() -> None:
-    """Launch the Textual configuration TUI."""
-    try:
-        from claudible.tui.app import ClaudibleApp  # noqa: F811
-    except ImportError:
-        click.echo("Textual not installed. Install with: pip install claudible[tui]", err=True)
-        sys.exit(1)
-
-    app = ClaudibleApp()
-    app.run()
-
-
-@main.command()
-def tray() -> None:
-    """Launch the system tray icon."""
-    # Pre-generate icons BEFORE pystray import to avoid Pillow/GTK conflict on KDE
-    try:
-        from claudible.gui.icons import ensure_icons
-
-        ensure_icons()
-    except ImportError:
-        pass
-
-    try:
-        from claudible.gui.tray import TrayApp
-    except ImportError:
-        click.echo("GUI deps not installed. Install with: pip install claudible[gui]", err=True)
-        sys.exit(1)
-
-    app = TrayApp()
-    app.run()
 
 
 @main.command("config")
@@ -543,7 +519,7 @@ def config_cmd() -> None:
 
     if not healthy:
         click.echo(f"TTS server is not running on {cfg.tts.host}:{cfg.tts.port}", err=True)
-        click.echo("Start it with: claudible server", err=True)
+        click.echo("Start it with: claudible start", err=True)
         sys.exit(1)
 
     click.echo(f"Opening {url}")

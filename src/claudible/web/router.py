@@ -25,7 +25,7 @@ from claudible.stt.noise import (
     is_rnnoise_active,
     is_rnnoise_installed,
 )
-from claudible.paths import DATA_DIR, VOICES_DIR
+from claudible.paths import DATA_DIR, VOICES_DIR, WAKEWORD_STATE, WINDOW_STATE
 from claudible.tts.voices import (
     combine_samples,
     get_voice_info,
@@ -39,6 +39,16 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
+# Callback for restarting the STT key listener when settings change.
+# Set by the tray app at startup; called by the save endpoint.
+_stt_restart_callback: callable | None = None
+
+
+def register_stt_restart(callback: callable) -> None:
+    """Register a callback to restart the STT key listener."""
+    global _stt_restart_callback
+    _stt_restart_callback = callback
+
 
 # ── Request/Response models ─────────────────────────────────────────────────
 
@@ -49,6 +59,7 @@ class ConfigPatch(BaseModel):
     rephrase: dict | None = None
     dictation: dict | None = None
     completion: dict | None = None
+    hook: dict | None = None
 
 
 class PersonaBody(BaseModel):
@@ -73,7 +84,7 @@ async def get_config():
 
 @router.patch("/config/{section}")
 async def patch_config(section: str, body: dict):
-    if section not in ("tts", "stt", "rephrase", "dictation", "completion"):
+    if section not in ("tts", "stt", "rephrase", "dictation", "completion", "hook"):
         raise HTTPException(400, f"Unknown config section: {section}")
     cfg = Config.load()
     sub = getattr(cfg, section)
@@ -81,6 +92,16 @@ async def patch_config(section: str, body: dict):
         if hasattr(sub, key):
             setattr(sub, key, value)
     cfg.save()
+
+    # Regenerate nerd-dictation callback when dictation/stt settings change
+    if section in ("dictation", "stt"):
+        try:
+            from claudible.stt.callback import generate_callback
+
+            generate_callback(cfg)
+        except Exception:
+            log.debug("Failed to regenerate callback", exc_info=True)
+
     return {"ok": True}
 
 
@@ -442,6 +463,63 @@ async def completion_test():
     return {"result": result}
 
 
+# ── Hook / IVR test ───────────────────────────────────────────────────────
+
+
+class OptionTestBody(BaseModel):
+    text: str
+
+
+@router.post("/hook/test-options")
+async def hook_test_options(body: OptionTestBody):
+    """Test option detection and IVR formatting on sample text."""
+    from claudible.hooks.filter import extract_options, extract_speakable
+    from claudible.hooks.stop_hook import _format_ivr
+
+    options = extract_options(body.text)
+    speakable = extract_speakable(body.text)
+
+    ivr_text = None
+    if options:
+        ivr_text = _format_ivr(speakable or "", options)
+
+    return {
+        "options": [{"num": n, "desc": d} for n, d in options] if options else [],
+        "speakable": speakable,
+        "ivr_text": ivr_text,
+    }
+
+
+# ── Wake word state ───────────────────────────────────────────────────────
+
+
+@router.get("/wakeword/state")
+async def wakeword_state():
+    """Read the current wake word state from the state file."""
+    import json
+
+    try:
+        with open(WAKEWORD_STATE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"state": "sleeping", "activated_at": 0.0}
+
+
+# ── STT restart ───────────────────────────────────────────────────────────
+
+
+@router.post("/stt/restart")
+async def stt_restart():
+    """Restart the STT key listener with current config."""
+    if _stt_restart_callback:
+        try:
+            _stt_restart_callback()
+            return {"ok": True, "message": "STT restarted"}
+        except Exception as e:
+            raise HTTPException(500, f"Restart failed: {e}")
+    return {"ok": True, "message": "No listener registered (not running via tray)"}
+
+
 # ── Noise suppression ──────────────────────────────────────────────────────
 
 
@@ -528,6 +606,82 @@ async def vosk_model_download(name: str):
         return {"ok": True, "message": msg}
     except (ValueError, RuntimeError) as e:
         raise HTTPException(500, str(e))
+
+
+# ── Window lock ────────────────────────────────────────────────────────────
+
+
+class WindowRegisterBody(BaseModel):
+    slot: str = "1"
+    window_id: int | None = None
+
+
+@router.get("/windows")
+async def windows_list():
+    """List registered windows with alive status."""
+    from claudible.stt.windows import read_window_state, validate_window
+
+    state = read_window_state()
+    windows = state.get("windows", {})
+    result = []
+    for slot, entry in sorted(windows.items()):
+        wid = entry.get("window_id")
+        alive = validate_window(wid) if wid else False
+        result.append({
+            "slot": slot,
+            "window_id": wid,
+            "title": entry.get("title", ""),
+            "pid": entry.get("pid"),
+            "process": entry.get("process"),
+            "alive": alive,
+        })
+    return result
+
+
+@router.get("/windows/watched")
+async def windows_watched():
+    """Return watched process list and currently detected processes."""
+    from claudible.stt.procwatch import scan_proc_for_names
+
+    cfg = Config.load()
+    names = cfg.stt.watched_processes
+    detected = scan_proc_for_names(names)
+    return {
+        "watched_processes": names,
+        "process_watch_interval": cfg.stt.process_watch_interval,
+        "detected": detected,
+    }
+
+
+@router.post("/windows/register")
+async def windows_register(body: WindowRegisterBody):
+    """Register a window to a slot. Captures active window if no window_id given."""
+    from claudible.stt.windows import register_window
+
+    try:
+        state = register_window(body.slot, body.window_id)
+        entry = state.get("windows", {}).get(body.slot, {})
+        return {"ok": True, "slot": body.slot, **entry}
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
+@router.delete("/windows/{slot}")
+async def windows_unregister(slot: str):
+    """Unregister a window slot."""
+    from claudible.stt.windows import unregister_window
+
+    unregister_window(slot)
+    return {"ok": True}
+
+
+@router.delete("/windows")
+async def windows_clear():
+    """Clear all window registrations."""
+    from claudible.stt.windows import clear_all_windows
+
+    clear_all_windows()
+    return {"ok": True}
 
 
 # ── Logs ────────────────────────────────────────────────────────────────────

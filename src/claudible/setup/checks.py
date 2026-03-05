@@ -456,20 +456,16 @@ def check_gpu() -> bool:
 
 def check_transformers_version() -> bool:
     """Verify transformers is the right version (installed by earlier check)."""
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "show", "transformers"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
+    try:
+        import transformers
+
+        version = transformers.__version__
+        major, minor = (int(x) for x in version.split(".")[:2])
+        if major > 4 or (major == 4 and minor > 44):
+            return _warn(f"transformers=={version} — needs <=4.44.2")
+        return _pass(f"transformers=={version} (compatible)")
+    except ImportError:
         return _warn("transformers not installed")
-    for line in result.stdout.splitlines():
-        if line.startswith("Version:"):
-            version = line.split(":", 1)[1].strip()
-            major, minor = (int(x) for x in version.split(".")[:2])
-            if major > 4 or (major == 4 and minor > 44):
-                return _warn(f"transformers=={version} — needs <=4.44.2")
-            return _pass(f"transformers=={version} (compatible)")
-    return _warn("transformers version unknown")
 
 
 def check_torchcodec() -> bool:

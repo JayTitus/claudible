@@ -12,8 +12,16 @@ import soundfile as sf
 log = logging.getLogger(__name__)
 
 
-def play_audio(audio: np.ndarray, sample_rate: int) -> None:
-    """Play audio array through the default output device."""
+def play_audio(audio: np.ndarray, sample_rate: int, lead_in_ms: int = 150) -> None:
+    """Play audio array through the default output device.
+
+    *lead_in_ms* prepends silence to let audio sinks (especially Bluetooth)
+    wake up before real content starts.  Set to 0 to disable.
+    """
+    if lead_in_ms > 0:
+        lead_in_samples = int(sample_rate * lead_in_ms / 1000)
+        silence = np.zeros((lead_in_samples, *audio.shape[1:]), dtype=audio.dtype)
+        audio = np.concatenate([silence, audio])
     sd.play(audio, samplerate=sample_rate)
     sd.wait()
 

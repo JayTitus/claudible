@@ -20,6 +20,7 @@ _ICON_COLORS = {
     "active": "#22c55e",
     "inactive": "#6b7280",
     "error": "#ef4444",
+    "listening": "#f59e0b",
 }
 
 
@@ -71,3 +72,7 @@ def icon_inactive() -> Image.Image:
 
 def icon_error() -> Image.Image:
     return load_icon("error")
+
+
+def icon_listening() -> Image.Image:
+    return load_icon("listening")

@@ -42,6 +42,10 @@ class SpeakResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global engine, config, _playback_queue
+
+    from claudible.lifecycle import remove_pid, write_pid
+
+    write_pid()
     config = Config.load()
     engine = TTSEngine(model_name=config.tts.model)
     engine.load()
@@ -49,6 +53,7 @@ async def lifespan(app: FastAPI):
     worker = asyncio.create_task(_playback_worker())
     yield
     worker.cancel()
+    remove_pid()
 
 
 app = FastAPI(title="Claudible TTS", lifespan=lifespan)
@@ -85,7 +90,8 @@ async def _playback_worker():
     """Process audio playback requests sequentially to avoid overlapping speech."""
     while True:
         audio, sr = await _playback_queue.get()
-        await asyncio.to_thread(play_audio, audio, sr)
+        lead_in = config.tts.audio_lead_in_ms if config else 150
+        await asyncio.to_thread(play_audio, audio, sr, lead_in)
         _playback_queue.task_done()
 
 

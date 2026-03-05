@@ -11,9 +11,38 @@ from pathlib import Path
 from evdev import InputDevice, categorize, ecodes
 
 from claudible.config import Config
+from claudible.paths import WAKEWORD_STATE
 from claudible.stt.dictation import Dictation
 
 log = logging.getLogger(__name__)
+
+
+def _write_wake_state(state: str, activated_at: float = 0.0) -> None:
+    """Write wake word state file atomically."""
+    import json
+    import os
+    import time
+
+    data = {"state": state, "activated_at": activated_at or (time.time() if state == "awake" else 0.0)}
+    tmp_path = str(WAKEWORD_STATE) + ".tmp"
+    try:
+        os.makedirs(str(WAKEWORD_STATE.parent), exist_ok=True)
+        with open(tmp_path, "w") as f:
+            json.dump(data, f)
+        os.rename(tmp_path, str(WAKEWORD_STATE))
+    except OSError:
+        log.debug("Failed to write wake state", exc_info=True)
+
+
+def _read_wake_state() -> str:
+    """Read current wake word state. Returns 'sleeping' or 'awake'."""
+    import json
+
+    try:
+        with open(WAKEWORD_STATE, "r") as f:
+            return json.load(f).get("state", "sleeping")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return "sleeping"
 
 
 def find_keyboards() -> list[InputDevice]:
@@ -101,6 +130,7 @@ def run_key_listener(
     stop_event: threading.Event,
     ptt_on: Callable[[], None] | None = None,
     ptt_off: Callable[[], None] | None = None,
+    wake_state_changed: Callable[[str], None] | None = None,
 ) -> None:
     """Unified key listener for both PTT (hold) and continuous toggle.
 
@@ -115,6 +145,7 @@ def run_key_listener(
         stop_event: Set to stop the listener.
         ptt_on: Called when PTT key is pressed.
         ptt_off: Called when PTT key is released.
+        wake_state_changed: Called when wake word state changes (receives 'awake' or 'sleeping').
     """
     ptt_key_name = config.stt.push_to_talk_key
     toggle_key_name = config.stt.toggle_key
@@ -147,6 +178,12 @@ def run_key_listener(
 
     continuous = False
     ptt_held = False
+    wakeword_enabled = config.stt.wakeword_enabled
+    _last_wake_state = "sleeping"
+
+    # Reset wake state file on start
+    if wakeword_enabled:
+        _write_wake_state("sleeping")
 
     try:
         while not stop_event.is_set():
@@ -163,6 +200,13 @@ def run_key_listener(
                         continue
                 log.info("Refreshed keyboard devices: %d found", len(keyboards))
                 continue
+
+            # Poll wake word state for tray icon updates (runs every select timeout)
+            if wakeword_enabled and continuous and wake_state_changed:
+                current_state = _read_wake_state()
+                if current_state != _last_wake_state:
+                    _last_wake_state = current_state
+                    wake_state_changed(current_state)
 
             for dev in r:
                 try:
@@ -200,6 +244,9 @@ def run_key_listener(
                         if state == key_event.key_down and not ptt_held:
                             ptt_held = True
                             log.info("PTT key down — starting dictation")
+                            # PTT bypasses wake word — force awake state
+                            if wakeword_enabled:
+                                _write_wake_state("awake")
                             dictation.start()
                             if ptt_on:
                                 ptt_on()
@@ -207,6 +254,9 @@ def run_key_listener(
                             ptt_held = False
                             log.info("PTT key up — stopping dictation")
                             dictation.stop()
+                            # Return to sleeping when PTT released
+                            if wakeword_enabled:
+                                _write_wake_state("sleeping")
                             if ptt_off:
                                 ptt_off()
     except Exception:

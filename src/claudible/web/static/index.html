@@ -15,6 +15,7 @@
     <a href="#" class="nav-item" data-tab="rephrase">Rephrase</a>
     <a href="#" class="nav-item" data-tab="personas">Personas</a>
     <a href="#" class="nav-item" data-tab="stt">STT</a>
+    <a href="#" class="nav-item" data-tab="output">Output</a>
     <a href="#" class="nav-item" data-tab="logs">Logs</a>
   </nav>
 
@@ -43,6 +44,10 @@
           <div class="status-row"><span>Persona</span><span id="dash-persona">--</span></div>
           <div class="status-row"><span>Model</span><span id="dash-rephrase-model">--</span></div>
           <div class="status-row"><span>Completion</span><span id="dash-completion">--</span></div>
+        </div>
+        <div class="card">
+          <h3>Output</h3>
+          <div class="status-row"><span>Hook mode</span><span id="dash-hook-mode">--</span></div>
         </div>
         <div class="card">
           <h3>Input</h3>
@@ -84,6 +89,11 @@
         <div class="form-group">
           <label for="voice-language">Language</label>
           <input type="text" id="voice-language" placeholder="en">
+        </div>
+        <div class="form-group">
+          <label for="voice-lead-in">Audio Lead-in (ms)</label>
+          <input type="number" id="voice-lead-in" step="10" min="0" max="1000" placeholder="150">
+          <small>Silence prepended before speech. Increase for Bluetooth (200-300ms), set 0 for wired.</small>
         </div>
         <div class="form-group">
           <label for="voice-dir">Voices Directory</label>
@@ -260,16 +270,62 @@
           <div id="stt-vosk-info" class="voice-info" style="margin-top:0.35rem;"></div>
           <div id="stt-vosk-download-status" class="test-output" style="display:none;"></div>
         </div>
-        <div class="form-group">
-          <label for="stt-dictation-path">nerd-dictation Path</label>
-          <input type="text" id="stt-dictation-path" placeholder="nerd-dictation">
-        </div>
         <div class="status-row" style="margin: 1rem 0;">
           <span>Input group</span>
           <span id="stt-input-group" class="badge">--</span>
         </div>
 
-        <h3>Trigger Word</h3>
+        <h3>Window Lock</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          Lock dictation to specific terminal windows. The process watcher auto-detects CLI tools
+          (claude, codex, gemini) and assigns their terminal windows to slots.
+          Manual registration is still available for custom setups.
+        </p>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="stt-window-lock-enabled">
+            <span>Enable window lock</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="stt-watched-processes">Watched Processes</label>
+          <input type="text" id="stt-watched-processes" placeholder="claude, codex, gemini">
+          <span style="font-size:0.75rem; color:var(--text-muted);">Comma-separated process names to auto-detect</span>
+        </div>
+        <div class="form-group">
+          <label for="stt-watch-interval">Poll Interval (seconds)</label>
+          <input type="number" id="stt-watch-interval" step="0.5" min="0.5" max="30" placeholder="2.0">
+        </div>
+        <div id="stt-window-list" style="margin: 0.5rem 0;"></div>
+        <div class="input-row" style="margin-top:0.5rem;">
+          <input type="text" id="stt-window-slot" placeholder="Slot (e.g. 2)" value="1" style="width:5rem;">
+          <button id="stt-window-register" class="btn btn-secondary">Register Window</button>
+          <button id="stt-window-clear" class="btn btn-danger btn-sm">Clear All</button>
+        </div>
+        <div id="stt-window-status" class="test-output" style="display:none;"></div>
+
+        <h3 style="margin-top:1.25rem;">Wake Word Listening</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          When enabled, continuous dictation suppresses typing until a trigger word is spoken.
+          After the trigger word, text passes through normally until timeout or deactivation.
+        </p>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="stt-wakeword-enabled">
+            <span>Enable wake word listening</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="stt-wakeword-timeout">Sleep timeout (seconds)</label>
+          <input type="number" id="stt-wakeword-timeout" step="1" min="0" placeholder="15">
+          <span style="font-size:0.75rem; color:var(--text-muted);">0 = no timeout (stays awake until deactivation phrase)</span>
+        </div>
+        <div class="status-row" style="margin: 0.5rem 0;">
+          <span>Wake word state</span>
+          <span id="stt-wakeword-status" class="badge">--</span>
+        </div>
+
+        <h3 style="margin-top:1.25rem;">Trigger Word</h3>
         <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
           Wake word for the active persona. When detected, activates speech recognition.
         </p>
@@ -312,6 +368,47 @@
         </div>
         <div id="stt-noise-install-status" class="test-output" style="display:none;"></div>
         <button id="stt-save" class="btn btn-primary" style="margin-top: 1rem;">Save</button>
+      </div>
+    </section>
+
+    <!-- Output -->
+    <section id="tab-output" class="tab">
+      <h1>Output Settings</h1>
+      <div class="card">
+        <h3>Stop Hook Behavior</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          Controls what the Claude Code stop hook reads aloud after each response.
+        </p>
+        <div class="form-group">
+          <label for="output-hook-mode">Read Aloud Mode</label>
+          <select id="output-hook-mode">
+            <option value="full">Full — Read all conversational text</option>
+            <option value="questions">Questions — Only when Claude asks a question or presents options</option>
+            <option value="completion">Completion — Only announce completion, never read content</option>
+            <option value="off">Off — Completely silent</option>
+          </select>
+        </div>
+        <button id="output-hook-save" class="btn btn-primary">Save</button>
+      </div>
+      <div class="card" style="margin-top: 1rem;">
+        <h3>IVR Option Detection</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          When Claude presents numbered options, they are read as "Option 1: description. Option 2: description."
+          You can select options by voice: say "select 2", "option three", "choose 1", or "pick four".
+        </p>
+        <div class="status-row" style="margin-bottom:0.75rem;">
+          <span>Option detection</span>
+          <span class="badge badge-yes">Active</span>
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem;">
+          <strong>Recognized voice phrases:</strong> select, option, number, choose, pick + digit or number word (one–ten)
+        </p>
+        <div class="form-group">
+          <label for="output-test-input">Test Option Detection</label>
+          <textarea id="output-test-input" rows="5" placeholder="Paste Claude output with numbered options..."></textarea>
+        </div>
+        <button id="output-test-btn" class="btn btn-secondary">Test Detection</button>
+        <div id="output-test-result" class="test-output" style="display:none;"></div>
       </div>
     </section>
 

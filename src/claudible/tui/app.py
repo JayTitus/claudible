@@ -1012,7 +1012,7 @@ class ClaudibleApp(App):
                 log_widget.write(f"[red]{stderr.decode(errors='replace')}[/]")
             else:
                 log_widget.write("[dim]No logs found. Is the claudible service installed?[/]")
-                log_widget.write("[dim]Run: claudible daemon install[/]")
+                log_widget.write("[dim]Run: claudible install[/]")
         except FileNotFoundError:
             log_widget.clear()
             log_widget.write("[red]journalctl not found — systemd logging unavailable[/]")

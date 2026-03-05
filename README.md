@@ -15,7 +15,10 @@ Everything runs locally. No cloud APIs, no data leaving your machine.
 ## Features
 
 - **Text-to-Speech** — Coqui XTTS v2 running locally on your GPU with voice cloning
-- **Speech-to-Text** — Push-to-talk via nerd-dictation (VOSK), types directly into your terminal
+- **Speech-to-Text** — Push-to-talk and always-listening via nerd-dictation (VOSK), types directly into your terminal
+- **Wake Word Detection** — Say a trigger word (e.g. "Jarvis") to activate, auto-sleeps after idle timeout
+- **Process-Based Window Lock** — Automatically detects CLI tools (Claude, Codex, Gemini) running in terminal windows and routes voice input to the correct one
+- **Auto STT Toggle** — Listening starts automatically when a watched process appears and stops when the last one exits
 - **Personality Rephrasing** — Optional LLM pass that rephrases Claude's output before speaking (any OpenAI-compatible API)
 - **Smart Filtering** — Only speaks conversational text, skips code blocks and command output
 - **Claude Code Integration** — Stop hook automatically speaks every response
@@ -35,17 +38,19 @@ graph LR
     B -->|conversational text| C[Rephrase]
     C -->|persona style| D[TTS Engine]
     D -->|audio| E[Speaker]
-    F[Microphone] -->|push-to-talk| G[STT]
+    F[Microphone] -->|push-to-talk / wake word| G[STT]
     G -->|typed text| A
+    H[Process Watcher] -->|detects CLI tools| I[Window Lock]
+    I -->|routes input| A
 ```
 
 When Claude finishes a response, the stop hook fires. The filter strips code blocks, command output, file paths, and technical noise. The rephraser (optional) transforms the text through a persona. The TTS engine speaks it using your chosen voice.
 
-For input, hold Right Ctrl to talk — your speech is transcribed and typed into the terminal.
+For input, hold Right Ctrl to talk (push-to-talk) or press Scroll Lock for always-listening mode. With wake word enabled, say a trigger word like "Jarvis" to activate, speak your command, and say "submit" to send.
 
 ## Requirements
 
-- Linux (Ubuntu/Debian-based)
+- Linux (Ubuntu/Debian-based, X11)
 - NVIDIA GPU with 4+ GB VRAM
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - [Ollama](https://ollama.ai) or any OpenAI-compatible API (optional, for rephrasing)
@@ -90,15 +95,100 @@ The browser-based config UI at `localhost:5959/config` is the primary way to man
 
 **Dashboard** — Server status, hook status, voice count, rephrase status, input group, and RNNoise status at a glance. Shows a banner with install commands if any system dependencies are missing.
 
-**Voice** — Select active voice, test voices, adjust speed and language. Shows voice sample details (duration, sample rate, file size).
+**Voice** — Select active voice, test voices, adjust speed, language, and audio lead-in. Shows voice sample details (duration, sample rate, file size).
 
 **Rephrase** — Enable/disable rephrasing, configure the API endpoint (Ollama, Open WebUI, or any OpenAI-compatible API), select model, choose persona. Includes a test rephrase panel to preview output.
 
 **Personas** — Browse all 12 built-in personas and any custom ones. Create new personas with a name, trigger word, trigger mode (always-listening or PTT-only), and system prompt. Edit or delete custom personas inline.
 
-**STT** — Configure push-to-talk key, toggle key, hold mode, VOSK model, and nerd-dictation path. Manage voice keywords (spoken words that map to keystrokes, e.g. "submit" presses Enter). Install and toggle RNNoise noise suppression directly from the UI.
+**STT** — Configure push-to-talk key, toggle key, hold mode, VOSK model, and nerd-dictation path. Manage voice keywords (spoken words that map to keystrokes, e.g. "submit" presses Enter). Install and toggle RNNoise noise suppression. Configure window lock watched processes and poll interval.
 
 **Logs** — View daemon logs (journalctl output) in a scrollable viewer.
+
+## Speech-to-Text Configuration
+
+### Step 1: Basic STT Setup
+
+After running `claudible install`, STT is configured with sensible defaults:
+
+- **Push-to-talk key**: Right Ctrl (hold to talk)
+- **Toggle key**: Scroll Lock (press to toggle always-listening mode)
+- **VOSK model**: `small` (fast, lower accuracy — switch to `large` for better recognition)
+
+Download a larger VOSK model for better accuracy:
+```bash
+mkdir -p ~/.local/share/vosk
+cd ~/.local/share/vosk
+wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip
+unzip vosk-model-en-us-0.22.zip
+mv vosk-model-en-us-0.22 large
+```
+
+Then set `vosk_model = "large"` in the STT tab of the config UI.
+
+### Step 2: Wake Word (Optional)
+
+Wake word lets you keep always-listening mode on without typing random noise. Speech is only processed after you say a trigger word.
+
+1. Open the config UI (`claudible config`)
+2. Go to the **STT** tab
+3. Enable **Wake Word**
+4. Set the idle timeout (default: 15 seconds — resets on each spoken phrase)
+5. Go to the **Personas** tab and set trigger words for your personas (e.g. "Jarvis" for default, "System" for a custom persona)
+
+How it works:
+- **Orange tray icon** — listening for wake word
+- Say **"Jarvis"** (or your trigger word) — icon turns **green**, speech is captured
+- Dictate your command — text is typed into the target terminal
+- Say **"submit"** — sends Enter and returns to wake word listening (orange)
+- If you stop talking for the idle timeout (default 15s), it auto-returns to wake word listening
+
+Slot routing with wake words: say "Jarvis two" to target slot 2 (second terminal).
+
+### Step 3: Window Lock / Process Watcher
+
+The process watcher automatically detects CLI tools running in **standalone terminal emulators** (Konsole, Alacritty, GNOME Terminal, etc.) and routes voice input to the correct terminal window.
+
+1. Open the config UI, go to the **STT** tab
+2. **Window Lock** should be enabled by default
+3. Configure **Watched Processes** (default: `claude, codex, gemini`)
+4. Set the **Poll Interval** (default: 2 seconds)
+
+How it works:
+- The daemon polls `/proc` for watched process names every 2 seconds
+- When a match is found in a terminal emulator, it auto-assigns a window slot
+- STT automatically starts when the first watched process appears
+- STT automatically stops when the last watched process exits
+- Multiple terminals get numbered slots (slot 1, slot 2, etc.)
+
+**Supported terminal emulators**: Konsole, Alacritty, Kitty, WezTerm, GNOME Terminal, xterm, xfce4-terminal, Tilix, Terminator, Guake, Yakuake, and others.
+
+**Limitation — IDE integrated terminals are not supported.** VS Code, JetBrains IDEs, and other editors with built-in terminals cannot be targeted by xdotool because the terminal is an internal widget, not a separate X11 window. Voice input sent to an IDE window goes to whatever element has focus (editor, file explorer, etc.), not the terminal pane. Run your CLI tools in a standalone terminal emulator for window lock to work correctly.
+
+### Step 4: Voice Keywords
+
+Voice keywords map spoken words to keystrokes. Defaults:
+
+| Spoken Word | Keystroke |
+|-------------|-----------|
+| submit | Enter |
+| enter | Enter |
+| backspace | BackSpace |
+| tab | Tab |
+| escape | Escape |
+
+Add custom keywords in the **STT** tab of the config UI.
+
+Option selection: say "select 2" or "option three" to type a number and press Enter (useful for Claude Code's numbered options).
+
+## Tray Icon States
+
+| Icon Color | Meaning |
+|------------|---------|
+| **Gray** | STT inactive |
+| **Orange** | Listening for wake word |
+| **Green** | Actively capturing speech |
+| **Red** | Error |
 
 ## Personas
 
@@ -119,7 +209,7 @@ Claudible ships with 12 built-in personas that rephrase Claude's output before s
 | **oracle** | Wise, calm, pattern-and-flow |
 | **engineer** | Scottish chief engineer — "She cannae take any more!" |
 
-Personas can be managed entirely from the **Personas** tab in the config UI. Each persona can have a **trigger word** (for future wake-word detection) and a **trigger mode** (always-listening or PTT-only).
+Personas can be managed entirely from the **Personas** tab in the config UI. Each persona can have a **trigger word** (for wake-word detection) and a **trigger mode** (always-listening or PTT-only).
 
 Custom personas are stored at `~/.config/claudible/personas/*.txt`.
 
@@ -142,17 +232,18 @@ claudible voices combine hal clip1.wav clip2.mp3 clip3.wav
 
 For best results, use 6-15 seconds of clean speech audio at 22050 Hz.
 
-## Daemon Management
+## Lifecycle Management
 
-The setup wizard installs and starts the daemon automatically. For manual control:
+Claudible uses PID-based singleton enforcement — only one instance runs at a time.
 
 ```bash
-claudible daemon start      # Start the service
-claudible daemon stop       # Stop the service
-claudible daemon status     # Show service status
-claudible daemon logs       # Follow service logs (Ctrl+C to stop)
-claudible daemon install    # Reinstall service file (e.g. after cuDNN changes)
+claudible start             # Start TTS server + tray icon
+claudible stop              # Stop the running process
+claudible restart           # Stop + start
+claudible                   # Show status (PID, server health)
 ```
+
+The setup wizard installs a systemd user service that runs `claudible start` on login.
 
 ## Building from Source
 
@@ -170,13 +261,13 @@ uv run ruff check src/
 ## Troubleshooting
 
 **Config UI not loading / 404**
-The TTS server must be running. If you updated claudible, restart the daemon — an old server process may still be running with the previous code:
+The TTS server must be running. If you updated claudible, restart — an old server process may still be running with the previous code:
 ```bash
-claudible daemon stop && claudible daemon start
+claudible restart
 ```
 
 **cuDNN not found / CUDA errors under systemd**
-Re-run `claudible daemon install` — it auto-detects the cuDNN library path.
+Re-run `claudible install` — it auto-detects the cuDNN library path.
 
 **"Permission denied" on keybinds**
 `claudible install` handles this, but if needed: `sudo usermod -aG input $USER`, then log out and back in.
@@ -188,7 +279,43 @@ Coqui TTS 0.22 requires `transformers<4.45`. Re-run `claudible install` to auto-
 Ensure cmake and build-essential are installed: `sudo apt install cmake build-essential`. Then use the Install button in the STT tab, or re-run `claudible install`.
 
 **Server not starting**
-Check logs with `claudible daemon logs` or run `claudible server` interactively.
+Check logs with `journalctl --user -u claudible -f` or run `claudible start` interactively.
+
+**Audio clipping / first word cut off**
+Audio sinks (especially Bluetooth) may need time to wake up from a suspended state. Increase the audio lead-in in the Voice tab of the config UI, or in `config.toml`:
+```toml
+[tts]
+audio_lead_in_ms = 250  # default 150, try 250-300 for Bluetooth
+```
+Set to `0` for wired headphones/speakers with no startup delay.
+
+**Window lock not detecting my terminal**
+The process watcher only supports standalone terminal emulators (Konsole, Alacritty, Kitty, etc.). IDE integrated terminals (VS Code, JetBrains) are not supported — xdotool cannot target internal terminal widgets. Run your CLI tools in a standalone terminal for window lock to work.
+
+**STT not typing into the right window**
+Check `claudible windows list` to see current slot assignments. If the wrong window is assigned, clear with `claudible windows clear` and restart. The watcher picks the largest window owned by a terminal emulator process.
+
+**Wake word not returning to sleep**
+The idle timeout (default 15s) resets on every spoken phrase. If you stop talking entirely, the tray health loop enforces the timeout within ~5 seconds. If the icon stays green, check that `wakeword_timeout` is set in your config.
+
+**Stale install after code changes**
+When reinstalling from source, clear the uv cache first:
+```bash
+uv cache clean claudible
+uv tool install . --python 3.11 --force
+claudible restart
+```
+
+**Bluetooth audio choppy**
+Try switching to a higher-quality codec:
+```bash
+# List available profiles
+pactl list cards | grep -A5 bluez
+
+# Switch to SBC-XQ (better quality than default SBC)
+pactl set-card-profile bluez_card.YOUR_DEVICE_ID a2dp-sink-sbc_xq
+```
+Also increase `audio_lead_in_ms` to 250-300 in the Voice config tab.
 
 ## License
 

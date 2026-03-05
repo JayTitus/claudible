@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sys
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,37 @@ def _extract_text(hook_data: dict) -> str | None:
     if isinstance(text, str):
         text = text.strip()
     return text if text else None
+
+
+def _format_ivr(speakable: str, options: list[tuple[int, str]]) -> str:
+    """Format speakable text with clean IVR-style option reading.
+
+    Strips raw numbered list fragments from the speakable text and appends
+    clean "Option N: description" lines.
+    """
+    # Remove raw numbered items that extract_speakable left in
+    # (e.g. "1. Quick fix 2. Refactor" flattened into one line)
+    cleaned = speakable
+    for num, desc in options:
+        # Remove patterns like "1. desc" or "1) desc" that got merged in
+        cleaned = re.sub(
+            rf"\b{num}\s*[.)]\s*{re.escape(desc)}\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    # Collapse extra whitespace
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    # Remove trailing period if we're about to append options
+    cleaned = cleaned.rstrip(".")
+
+    # Build IVR suffix
+    ivr_parts = [f"Option {num}: {desc}" for num, desc in options]
+    ivr = ". ".join(ivr_parts) + "."
+
+    if cleaned:
+        return f"{cleaned}. {ivr}"
+    return ivr
 
 
 async def _process(text: str) -> None:
@@ -78,6 +110,7 @@ async def _announce_completion() -> None:
 
 def main() -> None:
     """Entry point for the stop hook."""
+    from claudible.config import Config
     from claudible.paths import TTS_MUTE_FLAG
 
     if TTS_MUTE_FLAG.exists():
@@ -88,17 +121,46 @@ def main() -> None:
         if not raw:
             return
         data = json.loads(raw)
-        text = _extract_text(data)
-        if not text:
+        raw_text = _extract_text(data)
+        if not raw_text:
             return
 
-        # Filter to only conversational content — skip code, commands, output
-        from claudible.hooks.filter import extract_speakable
+        cfg = Config.load()
+        mode = cfg.hook.mode
 
-        text = extract_speakable(text)
-        if not text:
+        # Off mode: complete silence
+        if mode == "off":
+            return
+
+        # Completion mode: only announce completion, never speak content
+        if mode == "completion":
             asyncio.run(_announce_completion())
             return
+
+        # Filter to only conversational content
+        from claudible.hooks.filter import extract_options, extract_speakable
+
+        text = extract_speakable(raw_text)
+        options = extract_options(raw_text)
+
+        # Questions mode: only speak if question mark or options detected
+        if mode == "questions":
+            has_question = text and "?" in text
+            if not has_question and not options:
+                asyncio.run(_announce_completion())
+                return
+
+        # If filter removed everything but no options either
+        if not text and not options:
+            asyncio.run(_announce_completion())
+            return
+
+        # Apply IVR formatting when options detected
+        if options and text:
+            text = _format_ivr(text, options)
+        elif options and not text:
+            # Only options, no preamble
+            text = _format_ivr("", options)
 
         # Truncate very long responses to keep TTS reasonable
         if len(text) > 2000:

@@ -8,6 +8,7 @@ Voice interface for Claude Code: STT (nerd-dictation/VOSK) + TTS (Coqui XTTS v2)
 src/claudible/
 ├── cli.py              # Click CLI entry point
 ├── config.py           # TOML config with pydantic models
+├── lifecycle.py        # PID file singleton enforcement
 ├── paths.py            # XDG-compliant directory paths
 ├── tts/                # Text-to-speech
 │   ├── engine.py       # XTTS v2 model wrapper
@@ -54,9 +55,10 @@ pytest tests/
 
 ## CLI
 ```
-claudible                        # Status overview
-claudible run                    # Start TTS server + tray icon
-claudible server                 # Start TTS server only
+claudible                        # Status overview (PID + server health)
+claudible start                  # Start TTS server + tray icon (singleton)
+claudible stop                   # Stop the running process
+claudible restart                # Stop + start
 claudible config                 # Open browser config UI (localhost:5959/config)
 claudible ptt                    # Push-to-talk listener
 claudible speak "text"           # Send text to TTS
@@ -70,13 +72,12 @@ claudible personas list          # List all personas (built-in + custom)
 claudible personas show NAME     # Show persona prompt
 claudible personas create NAME   # Create custom persona (opens editor)
 claudible personas delete NAME   # Delete custom persona
+claudible windows list           # Show registered window slots
+claudible windows register [N]   # Register focused window to slot (default: 1)
+claudible windows clear          # Clear all window registrations
 claudible hooks install          # Install Claude Code hook
 claudible hooks uninstall        # Remove hook
-claudible daemon install         # Install systemd user service
-claudible daemon start/stop      # Start/stop daemon
-claudible daemon status/logs     # Check daemon status/logs
 claudible install                # Full interactive setup
-claudible tui                    # Legacy Textual TUI
 ```
 
 ## Personas

@@ -39,6 +39,7 @@ class TTSConfig(BaseModel):
     language: str = "en"
     speed: float = 1.0
     voices_dir: str = ""  # empty = default VOICES_DIR
+    audio_lead_in_ms: int = 150  # silence prepended to audio (helps Bluetooth sinks)
 
 
 class STTConfig(BaseModel):
@@ -48,6 +49,11 @@ class STTConfig(BaseModel):
     hold_mode: bool = True
     toggle_key: str = "KEY_SCROLLLOCK"
     noise_suppression: bool = False
+    wakeword_enabled: bool = False
+    wakeword_timeout: float = 15.0
+    window_lock_enabled: bool = True
+    watched_processes: list[str] = Field(default_factory=lambda: ["claude", "codex", "gemini"])
+    process_watch_interval: float = 2.0
 
 
 class DictationConfig(BaseModel):
@@ -81,12 +87,17 @@ class CompletionConfig(BaseModel):
     temperature: float = 0.9
 
 
+class HookConfig(BaseModel):
+    mode: str = "full"  # "full" / "questions" / "completion" / "off"
+
+
 class Config(BaseModel):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     dictation: DictationConfig = Field(default_factory=DictationConfig)
     rephrase: RephraseConfig = Field(default_factory=RephraseConfig)
     completion: CompletionConfig = Field(default_factory=CompletionConfig)
+    hook: HookConfig = Field(default_factory=HookConfig)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:

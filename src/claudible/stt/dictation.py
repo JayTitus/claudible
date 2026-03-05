@@ -68,8 +68,16 @@ class Dictation:
                 "Install it: https://github.com/ideasman42/nerd-dictation"
             )
 
+        # Ensure nerd-dictation callback script is current
+        try:
+            from claudible.stt.callback import generate_callback
+
+            generate_callback()
+        except Exception:
+            log.debug("Failed to generate nerd-dictation callback", exc_info=True)
+
         model_dir = self._model_path
-        cmd = [self._bin, "begin", "--vosk-model-dir", model_dir]
+        cmd = [self._bin, "begin", "--continuous", "--vosk-model-dir", model_dir]
 
         # Use RNNoise-filtered virtual mic when noise suppression is on
         if self._noise_suppression:

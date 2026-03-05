@@ -75,6 +75,44 @@ def extract_speakable(text: str) -> str | None:
     return result
 
 
+_OPTION_RE = re.compile(r"^\s*(\d+)[.)]\s+(.+)$")
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MARKDOWN_INLINE_RE = re.compile(r"`([^`]+)`")
+
+
+def extract_options(text: str) -> list[tuple[int, str]] | None:
+    """Extract numbered options from Claude's output.
+
+    Returns list of (number, description) tuples, or None if fewer than 2 found.
+    Ignores numbered lines inside code blocks.
+    """
+    if not text:
+        return None
+
+    lines = text.split("\n")
+    options: list[tuple[int, str]] = []
+    in_code_block = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+
+        m = _OPTION_RE.match(stripped)
+        if m:
+            num = int(m.group(1))
+            desc = m.group(2).strip()
+            # Strip markdown bold and inline code
+            desc = _MARKDOWN_BOLD_RE.sub(r"\1", desc)
+            desc = _MARKDOWN_INLINE_RE.sub(r"\1", desc)
+            options.append((num, desc))
+
+    return options if len(options) >= 2 else None
+
+
 def _is_noise(line: str) -> bool:
     """Check if a line is technical noise that shouldn't be spoken."""
     if not line:

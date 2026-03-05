@@ -87,6 +87,7 @@ async function loadDashboard() {
     document.getElementById("dash-persona").textContent = c.rephrase.persona;
     document.getElementById("dash-rephrase-model").textContent = c.rephrase.model;
     document.getElementById("dash-completion").textContent = c.completion?.mode || "none";
+    document.getElementById("dash-hook-mode").textContent = c.hook?.mode || "full";
     document.getElementById("dash-input").innerHTML = badge(s.input_group, "bool");
     document.getElementById("dash-rnnoise").innerHTML = badge(s.rnnoise_active, "bool");
 
@@ -141,6 +142,7 @@ async function loadVoice() {
 
   document.getElementById("voice-speed").value = cfg.tts.speed;
   document.getElementById("voice-language").value = cfg.tts.language;
+  document.getElementById("voice-lead-in").value = cfg.tts.audio_lead_in_ms ?? 150;
   document.getElementById("voice-dir").value = cfg.tts.voices_dir;
 }
 
@@ -169,6 +171,7 @@ document.getElementById("voice-save").addEventListener("click", async () => {
     await api("PATCH", "/config/tts", {
       speed: parseFloat(document.getElementById("voice-speed").value),
       language: document.getElementById("voice-language").value,
+      audio_lead_in_ms: parseInt(document.getElementById("voice-lead-in").value) || 150,
       voices_dir: document.getElementById("voice-dir").value,
     });
     cfg = null;
@@ -728,8 +731,29 @@ async function loadSTT() {
   document.getElementById("stt-ptt-key").value = cfg.stt.push_to_talk_key;
   document.getElementById("stt-toggle-key").value = cfg.stt.toggle_key;
   document.getElementById("stt-hold-mode").checked = cfg.stt.hold_mode;
-  document.getElementById("stt-dictation-path").value = cfg.stt.nerd_dictation_path;
+  document.getElementById("stt-wakeword-enabled").checked = cfg.stt.wakeword_enabled || false;
+  document.getElementById("stt-wakeword-timeout").value = cfg.stt.wakeword_timeout ?? 15;
+  document.getElementById("stt-window-lock-enabled").checked = cfg.stt.window_lock_enabled ?? true;
+  document.getElementById("stt-watched-processes").value = (cfg.stt.watched_processes || ["claude", "codex", "gemini"]).join(", ");
+  document.getElementById("stt-watch-interval").value = cfg.stt.process_watch_interval ?? 2.0;
 
+  // Load window slots
+  await loadWindowSlots();
+
+  // Poll wake word state
+  try {
+    const ws = await api("GET", "/wakeword/state");
+    const badge = document.getElementById("stt-wakeword-status");
+    if (ws.state === "awake") {
+      badge.className = "badge badge-yes";
+      badge.textContent = "Awake";
+    } else {
+      badge.className = "badge badge-no";
+      badge.textContent = "Sleeping";
+    }
+  } catch (e) {
+    document.getElementById("stt-wakeword-status").textContent = "--";
+  }
   // Populate VOSK model dropdown
   const voskSel = document.getElementById("stt-vosk-model");
   const voskInfo = document.getElementById("stt-vosk-info");
@@ -911,15 +935,144 @@ document.getElementById("stt-save").addEventListener("click", async () => {
         toggle_key: document.getElementById("stt-toggle-key").value,
         hold_mode: document.getElementById("stt-hold-mode").checked,
         vosk_model: document.getElementById("stt-vosk-model").value,
-        nerd_dictation_path: document.getElementById("stt-dictation-path").value,
+        wakeword_enabled: document.getElementById("stt-wakeword-enabled").checked,
+        wakeword_timeout: parseFloat(document.getElementById("stt-wakeword-timeout").value) || 15,
+        window_lock_enabled: document.getElementById("stt-window-lock-enabled").checked,
+        watched_processes: document.getElementById("stt-watched-processes").value.split(",").map(s => s.trim()).filter(Boolean),
+        process_watch_interval: parseFloat(document.getElementById("stt-watch-interval").value) || 2.0,
       }),
       api("PATCH", "/config/dictation", {
         keywords: currentKeywords,
       }),
     ]);
     cfg = null;
-    toast("STT settings saved");
+
+    // Restart STT key listener to pick up new settings
+    try {
+      await api("POST", "/stt/restart");
+      toast("STT settings saved & listener restarted");
+    } catch (e) {
+      toast("STT settings saved (restart listener manually)", true);
+    }
   } catch (e) { toast("Save failed: " + e.message, false); }
+});
+
+/* ── Window Lock ───────────────────────────────────────────────────────── */
+
+async function loadWindowSlots() {
+  const container = document.getElementById("stt-window-list");
+  try {
+    const windows = await api("GET", "/windows");
+    if (windows.length === 0) {
+      container.innerHTML = '<span style="font-size:0.85rem; color:var(--text-muted);">No windows registered.</span>';
+      return;
+    }
+    container.innerHTML = "";
+    windows.forEach(w => {
+      const row = document.createElement("div");
+      row.className = "input-row";
+      row.style.marginBottom = "0.35rem";
+      const aliveClass = w.alive ? "badge-yes" : "badge-no";
+      const aliveText = w.alive ? "alive" : "gone";
+      const processInfo = w.process ? `<span class="badge badge-num" style="font-size:0.7rem; margin-left:0.25rem;">${esc(w.process)}</span>` : "";
+      row.innerHTML =
+        `<span style="font-weight:600; min-width:3rem;">Slot ${esc(w.slot)}</span>` +
+        `<span style="flex:1; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(w.title)}">${esc(w.title)}</span>` +
+        processInfo +
+        `<span class="badge ${aliveClass}" style="font-size:0.75rem;">${aliveText}</span>`;
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn btn-danger btn-sm";
+      delBtn.textContent = "X";
+      delBtn.addEventListener("click", async () => {
+        try {
+          await api("DELETE", `/windows/${encodeURIComponent(w.slot)}`);
+          toast("Window slot removed");
+          loadWindowSlots();
+        } catch (e) { toast("Failed: " + e.message, false); }
+      });
+      row.appendChild(delBtn);
+      container.appendChild(row);
+    });
+  } catch (e) {
+    container.innerHTML = '<span style="font-size:0.85rem; color:var(--text-muted);">Failed to load windows.</span>';
+  }
+}
+
+document.getElementById("stt-window-register").addEventListener("click", async () => {
+  const slot = document.getElementById("stt-window-slot").value.trim() || "1";
+  const btn = document.getElementById("stt-window-register");
+  const status = document.getElementById("stt-window-status");
+
+  btn.disabled = true;
+  status.style.display = "";
+
+  // 3-second countdown for focus switch
+  for (let i = 3; i > 0; i--) {
+    status.textContent = `Focus target window... ${i}...`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  status.textContent = "Capturing...";
+  try {
+    const res = await api("POST", "/windows/register", { slot });
+    status.textContent = `Registered slot ${slot}: ${res.title || "window " + res.window_id}`;
+    toast("Window registered to slot " + slot);
+    loadWindowSlots();
+  } catch (e) {
+    status.textContent = "Failed: " + e.message;
+    toast("Registration failed: " + e.message, false);
+  }
+  btn.disabled = false;
+});
+
+document.getElementById("stt-window-clear").addEventListener("click", async () => {
+  try {
+    await api("DELETE", "/windows");
+    toast("All windows cleared");
+    loadWindowSlots();
+  } catch (e) { toast("Failed: " + e.message, false); }
+});
+
+/* ── Output ─────────────────────────────────────────────────────────────── */
+
+async function loadOutput() {
+  await loadConfig();
+  document.getElementById("output-hook-mode").value = cfg.hook?.mode || "full";
+}
+
+document.getElementById("output-hook-save").addEventListener("click", async () => {
+  try {
+    await api("PATCH", "/config/hook", {
+      mode: document.getElementById("output-hook-mode").value,
+    });
+    cfg = null;
+    toast("Output settings saved");
+  } catch (e) { toast("Save failed: " + e.message, false); }
+});
+
+document.getElementById("output-test-btn").addEventListener("click", async () => {
+  const text = document.getElementById("output-test-input").value.trim();
+  if (!text) { toast("Paste some text first", false); return; }
+  const out = document.getElementById("output-test-result");
+  out.style.display = "";
+  out.textContent = "Detecting...";
+  try {
+    const res = await api("POST", "/hook/test-options", { text });
+    let result = "";
+    if (res.options && res.options.length > 0) {
+      result += "Detected options:\n";
+      res.options.forEach(o => { result += `  ${o.num}. ${o.desc}\n`; });
+      result += "\nIVR text:\n  " + (res.ivr_text || "(none)");
+    } else {
+      result = "No numbered options detected.";
+    }
+    if (res.speakable) {
+      result += "\n\nSpeakable text:\n  " + res.speakable;
+    }
+    out.textContent = result;
+  } catch (e) {
+    out.textContent = "Error: " + e.message;
+  }
 });
 
 /* ── Logs ───────────────────────────────────────────────────────────────── */
@@ -949,6 +1102,7 @@ const loaders = {
   rephrase: loadRephrase,
   personas: loadPersonas,
   stt: loadSTT,
+  output: loadOutput,
   logs: loadLogs,
 };
 
@@ -957,6 +1111,20 @@ const loaders = {
 setInterval(async () => {
   const activeTab = document.querySelector(".nav-item.active")?.dataset.tab;
   if (activeTab === "dashboard") loadDashboard();
+  // Poll wake word state when STT tab is active
+  if (activeTab === "stt") {
+    try {
+      const ws = await api("GET", "/wakeword/state");
+      const el = document.getElementById("stt-wakeword-status");
+      if (ws.state === "awake") {
+        el.className = "badge badge-yes";
+        el.textContent = "Awake";
+      } else {
+        el.className = "badge badge-no";
+        el.textContent = "Sleeping";
+      }
+    } catch (e) { /* ignore */ }
+  }
 }, 5000);
 
 /* ── Inline nav links ────────────────────────────────────────────────────── */
