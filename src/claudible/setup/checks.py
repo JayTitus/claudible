@@ -73,6 +73,7 @@ SYSTEM_DEPS = [
     "xdotool",                  # nerd-dictation types into focused window (X11)
     "cmake",                    # RNNoise LADSPA plugin build
     "build-essential",          # RNNoise LADSPA plugin build (C++ compiler)
+    "podman",                   # Managed Ollama container for STT correction + rephrase
 ]
 
 # Python packages to verify/fix — these are also in pyproject.toml dependencies,

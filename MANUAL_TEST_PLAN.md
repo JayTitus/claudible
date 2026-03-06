@@ -20,6 +20,8 @@
 
 ### Optional
 - Ollama running locally (`ollama serve`) with a model pulled (e.g. `llama3.2:3b`)
+- Podman installed (`sudo apt install podman`) — for container tests
+- `nvidia-container-toolkit` configured — for GPU-accelerated container
 - Second monitor (for multi-window testing)
 - Second terminal open alongside the first
 
@@ -48,8 +50,9 @@
 | 10 | Wizard: voice test | Speaks a test phrase through speakers | |
 | 11 | Wizard: hook install | Installs Claude Code stop hook | |
 | 12 | Wizard: RNNoise | Offers to build RNNoise noise suppression | |
-| 13 | Wizard: systemd daemon | Installs user service file | |
-| 14 | Wizard: summary | Shows final config summary | |
+| 13 | Wizard: Ollama container | Detects Podman, offers managed container, pulls models (~4GB) | |
+| 14 | Wizard: systemd daemon | Installs user service file | |
+| 15 | Wizard: summary | Shows final config summary | |
 
 ### 1.2 Re-install Over Existing
 
@@ -66,7 +69,7 @@
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
-| 1 | `claudible start` | Prints "Starting TTS server...", "Launching tray icon...", blocks | |
+| 1 | `claudible start` | Prints "Starting TTS server...", "Launching tray icon (foreground)...", blocks (expected) | |
 | 2 | Verify tray icon appears | System tray shows claudible icon (grey = inactive) | |
 | 3 | In another terminal: `claudible` | Shows "Process: running (PID xxx)", "Server: running" | |
 | 4 | `claudible start` (second instance) | Prints "already running (PID xxx)", exits 0 | |
@@ -469,20 +472,139 @@
 
 ---
 
-## 9. Web Config UI
+## 9. Ollama Container
 
-### 9.1 Navigation & Layout
+### 9.1 Container CLI
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | `claudible container status` (no container running) | Shows "not found", managed: no | |
+| 2 | `claudible container start` | Starts container on port 11435, waits for ready | |
+| 3 | `claudible container status` | Shows "running", healthy: yes, lists models | |
+| 4 | `claudible container pull llama3.2:1b` | Pulls model, prints success | |
+| 5 | `claudible container pull llama3.2:3b` | Pulls model, prints success | |
+| 6 | `claudible container status` | Both models listed | |
+| 7 | `claudible container stop` | Container stopped | |
+| 8 | `claudible container status` | Shows "not found" | |
+
+### 9.2 Container Enable (Full Setup)
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | `claudible container enable` | Sets managed=true + correction.enabled=true in config | |
+| 2 | | Starts container if not running | |
+| 3 | | Pulls correction model (llama3.2:1b) | |
+| 4 | | Pulls rephrase model (llama3.2:3b) | |
+| 5 | | Prints "All models ready. STT correction is now enabled." | |
+| 6 | `cat ~/.config/claudible/config.toml` | `[container] managed = true`, `[correction] enabled = true` | |
+| 7 | `claudible container status` | Running, healthy, both models | |
+
+### 9.3 Container Persistence
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | `claudible stop` (daemon) | Claudible stopped, container still running | |
+| 2 | `claudible container status` | Still "running" — container persists | |
+| 3 | `claudible start` (with managed=true) | Daemon starts, detects existing container, skips startup | |
+
+### 9.4 Container Without Podman
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | Uninstall podman, run `claudible container start` | Error: "podman not found" | |
+| 2 | Wizard: Step 8 without podman | Skipped, prints install instructions | |
+
+---
+
+## 10. STT Correction
+
+### 10.1 Correction Flow (End-to-End)
+
+**Setup**: Container running with llama3.2:1b, correction enabled, daemon running.
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | Enable STT correction in web UI or config.toml | `[correction] enabled = true` | |
+| 2 | Activate dictation (PTT or toggle) | | |
+| 3 | Speak a phrase with likely VOSK errors | Text typed into terminal | |
+| 4 | Check accuracy log: `claudible accuracy tail -n 1` | Shows raw → corrected pair | |
+| 5 | If correction changed text: `*` marker, raw ≠ corrected | Correct | |
+| 6 | Latency shown (expect 80-300ms on RTX 5090) | Reasonable for 1b model | |
+
+### 10.2 Correction Fallback
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | Stop Ollama container: `claudible container stop` | | |
+| 2 | Speak with correction enabled | Raw text typed (no correction applied) | |
+| 3 | No crash, no delay beyond timeout (1500ms max) | Graceful fallback | |
+| 4 | Accuracy log entry shows was_changed=false | Correct | |
+
+### 10.3 Correction Disabled
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | Disable correction: `[correction] enabled = false` | | |
+| 2 | Speak with dictation active | Raw text typed, no correction call | |
+| 3 | No latency overhead | Same speed as before | |
+| 4 | No entries added to accuracy log | Correct (or entry with was_changed=false if log_enabled) | |
+
+### 10.4 Correction API (Direct Test)
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | `curl -X POST http://127.0.0.1:5959/api/correct -H 'Content-Type: application/json' -d '{"text":"i went too the store"}'` | Returns `{"text":"I went to the store","corrected":true}` | |
+| 2 | Same with correction disabled | Returns `{"text":"i went too the store","corrected":false}` | |
+| 3 | Empty text: `{"text":""}` | Returns empty text, no error | |
+
+---
+
+## 11. STT Accuracy Tracking
+
+### 11.1 Accuracy CLI
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | `claudible accuracy report` (no data) | "No correction data yet." | |
+| 2 | Enable correction, speak several phrases | Entries accumulate | |
+| 3 | `claudible accuracy report` | Shows total, changed count, change rate %, avg/p50/p95 latency | |
+| 4 | `claudible accuracy tail -n 5` | Shows last 5 entries: `*` for changed, raw → corrected (latency) | |
+| 5 | `claudible accuracy tail -n 1` | Shows only latest entry | |
+| 6 | `claudible accuracy clear` | "Accuracy log cleared." | |
+| 7 | `claudible accuracy report` | "No correction data yet." again | |
+
+### 11.2 Accuracy Log File
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | `cat ~/.cache/claudible/stt_accuracy.jsonl` | One JSON object per line | |
+| 2 | Each line has: timestamp, raw, corrected, latency_ms, model, was_changed | All fields present | |
+| 3 | Delete the file, speak again | File recreated | |
+
+### 11.3 Accuracy API (Web)
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | `curl http://127.0.0.1:5959/api/accuracy/stats` | JSON with total, changed, change_rate, avg/p50/p95 | |
+| 2 | `curl http://127.0.0.1:5959/api/accuracy/recent?limit=5` | JSON array of recent entries | |
+| 3 | `curl -X DELETE http://127.0.0.1:5959/api/accuracy` | `{"ok":true}`, log cleared | |
+
+---
+
+## 12. Web Config UI
+
+### 12.1 Navigation & Layout
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
 | 1 | `claudible config` | Browser opens `http://127.0.0.1:5959/config` | |
-| 2 | Sidebar visible with all tabs: Dashboard, Voice, Studio, Rephrase, Personas, STT, Output, Logs | All present | |
+| 2 | Sidebar visible with all tabs: Dashboard, Voice, Studio, Rephrase, Personas, STT, Container, Output, Logs | All present | |
 | 3 | Click each tab | Content area switches, no 404s or JS errors | |
 | 4 | Active tab highlighted in sidebar (red border) | Visual indicator correct | |
 | 5 | Resize browser narrow (< 700px) | Sidebar collapses to horizontal nav | |
 | 6 | Toast notifications appear top-right, auto-dismiss in 3s | Correct | |
 
-### 9.2 Dashboard
+### 12.2 Dashboard
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -495,10 +617,12 @@
 | 7 | Persona name shown | Matches config | |
 | 8 | Input group badge | Yes if user in input group | |
 | 9 | RNNoise badge | Yes if active | |
-| 10 | Missing deps banner appears if deps missing | Shows apt install command | |
-| 11 | Dashboard auto-refreshes every 5s | Values update if state changes | |
+| 10 | STT correction badge | Yes/No matches config | |
+| 11 | Container badge | Running/Off matches state | |
+| 12 | Missing deps banner appears if deps missing | Shows apt install command | |
+| 13 | Dashboard auto-refreshes every 5s | Values update if state changes | |
 
-### 9.3 STT Settings
+### 12.3 STT Settings
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -511,8 +635,13 @@
 | 7 | Input group badge | Correct status | |
 | 8 | Change PTT key to `KEY_F13`, Save | Toast "saved & listener restarted" | |
 | 9 | Verify PTT now responds to F13 | Key change took effect | |
+| 10 | STT Correction: "Enable STT correction" checkbox | Matches config | |
+| 11 | STT Correction: Model field shows `llama3.2:1b` | Matches config | |
+| 12 | STT Correction: Timeout field shows `1500` | Matches config | |
+| 13 | STT Correction: Log checkbox checked by default | Matches config | |
+| 14 | Toggle correction on, Save | Config updated, callback regenerated | |
 
-### 9.4 STT — Window Lock Section
+### 12.4 STT — Window Lock Section
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -530,7 +659,7 @@
 | 12 | Change poll interval to 5.0, Save (R) | Config updated | |
 | 13 | Disable window lock, Save (R) | No more auto-detection | |
 
-### 9.5 STT — Wake Word Section
+### 12.5 STT — Wake Word Section
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -542,7 +671,7 @@
 | 6 | Trigger mode "Always listening" | Wake word works in continuous + PTT | |
 | 7 | Trigger mode "Push-to-talk only" | Wake word only works during PTT hold | |
 
-### 9.6 STT — Voice Keywords Section
+### 12.6 STT — Voice Keywords Section
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -552,7 +681,7 @@
 | 4 | Click Save | Toast confirms, keywords active | |
 | 5 | Test: say "undo" during dictation | Ctrl+Z keystroke sent | |
 
-### 9.7 STT — Noise Suppression Section
+### 12.7 STT — Noise Suppression Section
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -563,7 +692,7 @@
 | 5 | Click "Enable RNNoise Filter" | Active badge turns green | |
 | 6 | Click "Disable RNNoise Filter" | Active badge turns red | |
 
-### 9.8 Output Settings
+### 12.8 Output Settings
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -574,7 +703,31 @@
 | 5 | Click "Test Detection" | Detected options listed, IVR text shown | |
 | 6 | Paste text without options | "No numbered options detected" | |
 
-### 9.9 Logs
+### 12.9 Container Tab — Web UI
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| 1 | Navigate to Container tab | Status, config, models, accuracy sections visible | |
+| 2 | Container status badge shows "not found" or "Running" | Matches `claudible container status` | |
+| 3 | Healthy badge: Yes if Ollama responding | Correct | |
+| 4 | Port shows configured port (default 11435) | Correct | |
+| 5 | Click Start button | "Starting..." message, then status becomes Running | |
+| 6 | Click Refresh | Status updates | |
+| 7 | Click Stop button | Container stops, badge shows "not found" | |
+| 8 | Managed toggle checkbox | Matches config | |
+| 9 | GPU toggle checkbox | Matches config | |
+| 10 | Correction model field shows `llama3.2:1b` | Matches config | |
+| 11 | Rephrase model field shows `llama3.2:3b` | Matches config | |
+| 12 | Port field shows `11435` | Matches config | |
+| 13 | Change managed to true, Save | Config updated | |
+| 14 | Models section shows pulled models | Model names listed | |
+| 15 | Enter model name (e.g. `llama3.2:1b`), click Pull | Pull progress, then model appears in list | |
+| 16 | STT Accuracy section: stats show totals | Matches `claudible accuracy report` | |
+| 17 | Recent corrections: shows raw → corrected pairs | `*` marker for changed entries | |
+| 18 | Click Refresh (accuracy) | Stats and recent entries update | |
+| 19 | Click Clear Log | Accuracy data cleared | |
+
+### 12.10 Logs
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -585,7 +738,7 @@
 
 ---
 
-## 10. Tray Icon States
+## 13. Tray Icon States
 
 | # | State | Expected Icon | Menu Text |
 |---|-------|--------------|-----------|
@@ -602,9 +755,9 @@
 
 ---
 
-## 11. Config File Scenarios
+## 14. Config File Scenarios
 
-### 11.1 config.toml Direct Editing
+### 14.1 config.toml Direct Editing
 
 All config changes below require daemon restart unless otherwise noted.
 
@@ -627,8 +780,13 @@ All config changes below require daemon restart unless otherwise noted.
 | 15 | Empty config file | Delete config.toml entirely | All defaults applied |
 | 16 | Corrupt config file | Write `{garbage` | Error handled gracefully, defaults used |
 | 17 | Missing section | Config with only `[tts]` block | Other sections use defaults |
+| 18 | Enable correction | `[correction] enabled = true` | Callback regenerated with correction |
+| 19 | Set correction model | `[correction] model = "llama3.2:1b"` | Used for STT correction |
+| 20 | Set correction timeout | `[correction] timeout_ms = 2000` | Falls back after 2s |
+| 21 | Enable managed container | `[container] managed = true` | Container auto-starts with daemon |
+| 22 | Set container port | `[container] port = 11435` | Container binds to this port |
 
-### 11.2 Config Migration
+### 14.2 Config Migration
 
 | # | Scenario | Expected |
 |---|----------|----------|
@@ -636,7 +794,7 @@ All config changes below require daemon restart unless otherwise noted.
 | 2 | Old config with `[rephrase] model = "Select.blah"` | Model field stripped, uses default |
 | 3 | Config with both `ollama_url` and `api_url` | `ollama_url` removed, `api_url` preserved |
 
-### 11.3 Config Persistence Through Web UI
+### 14.3 Config Persistence Through Web UI
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
@@ -645,12 +803,14 @@ All config changes below require daemon restart unless otherwise noted.
 | 3 | Create persona in web UI | `~/.config/claudible/personas/name.txt` created | |
 | 4 | Change trigger word in web UI, Save | `config.toml` `[rephrase.trigger_words]` updated | |
 | 5 | Change watched processes in web UI, Save | `config.toml` `[stt]` updated with new list | |
+| 6 | Toggle STT correction in web UI, Save | `config.toml` `[correction]` updated | |
+| 7 | Change container settings in web UI, Save | `config.toml` `[container]` updated | |
 
 ---
 
-## 12. Edge Cases & Error Scenarios
+## 15. Edge Cases & Error Scenarios
 
-### 12.1 Process Watcher Edge Cases
+### 15.1 Process Watcher Edge Cases
 
 | # | Scenario | Expected | Result |
 |---|----------|----------|--------|
@@ -665,7 +825,7 @@ All config changes below require daemon restart unless otherwise noted.
 | 9 | xdotool missing from PATH | `find_terminal_window` returns None, process skipped | |
 | 10 | `/proc` permission denied (container?) | `scan_proc_for_names` returns [] | |
 
-### 12.2 Audio Edge Cases
+### 15.2 Audio Edge Cases
 
 | # | Scenario | Expected | Result |
 |---|----------|----------|--------|
@@ -674,15 +834,18 @@ All config changes below require daemon restart unless otherwise noted.
 | 3 | Multiple rapid responses (queue them) | Spoken sequentially, no overlap | |
 | 4 | Audio device disconnected | Error logged, no crash | |
 
-### 12.3 Network Edge Cases
+### 15.3 Network Edge Cases
 
 | # | Scenario | Expected | Result |
 |---|----------|----------|--------|
 | 1 | TTS server not running, `claudible speak "test"` | Error message printed | |
 | 2 | Ollama not running, rephrase enabled | Fallback to original text | |
 | 3 | TTS server port already in use | Server fails to bind, error in logs | |
+| 4 | Container port 11435 already in use | Container start fails, error message | |
+| 5 | STT correction timeout (Ollama slow) | Falls back to raw text after timeout_ms | |
+| 6 | Container healthy but model not pulled | Correction fails, falls back to raw | |
 
-### 12.4 File System Edge Cases
+### 15.4 File System Edge Cases
 
 | # | Scenario | Expected | Result |
 |---|----------|----------|--------|
@@ -692,8 +855,11 @@ All config changes below require daemon restart unless otherwise noted.
 | 4 | `wakeword.json` missing | Returns `{"state": "sleeping"}` | |
 | 5 | PID file with stale PID | Cleaned up, `is_running()` returns False | |
 | 6 | Read-only config directory | Error logged, operations fail gracefully | |
+| 7 | `stt_accuracy.jsonl` missing | Created on first correction | |
+| 8 | `stt_accuracy.jsonl` corrupt | Partial read, no crash | |
+| 9 | `~/.local/share/claudible/ollama/` missing | Created on container start | |
 
-### 12.5 Keyboard/Input Edge Cases
+### 15.5 Keyboard/Input Edge Cases
 
 | # | Scenario | Expected | Result |
 |---|----------|----------|--------|
@@ -704,7 +870,7 @@ All config changes below require daemon restart unless otherwise noted.
 
 ---
 
-## 13. Multi-Agent Scenario (Full Integration)
+## 16. Multi-Agent Scenario (Full Integration)
 
 This is the highest-level end-to-end test combining all features.
 
@@ -737,7 +903,7 @@ This is the highest-level end-to-end test combining all features.
 
 ---
 
-## 14. Performance & Stability
+## 17. Performance & Stability
 
 | # | Test | Expected | Result |
 |---|------|----------|--------|
@@ -752,7 +918,7 @@ This is the highest-level end-to-end test combining all features.
 
 ---
 
-## 15. Regression Checklist
+## 18. Regression Checklist
 
 After any code change, verify these critical paths:
 
@@ -767,3 +933,9 @@ After any code change, verify these critical paths:
 - [ ] Config save from web UI persists to disk
 - [ ] Rephrase with persona changes spoken style
 - [ ] Window lock routes text to correct terminal
+- [ ] `claudible container enable` → starts, pulls models, correction enabled
+- [ ] `claudible container status` → shows running + models
+- [ ] STT correction: speak → corrected text typed (when enabled)
+- [ ] STT correction: falls back to raw when container down
+- [ ] `claudible accuracy report` → shows stats
+- [ ] Container tab in web UI loads with status + models + accuracy

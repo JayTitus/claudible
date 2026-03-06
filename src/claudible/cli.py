@@ -66,11 +66,24 @@ def _status() -> None:
 
 @main.command()
 def start() -> None:
-    """Start the TTS server + system tray."""
+    """Start the TTS server + system tray.
+
+    Prefer `systemctl --user start claudible` for background operation.
+    """
+    import os
     import threading
 
     from claudible.config import Config
     from claudible.lifecycle import is_running, read_pid, write_pid
+    from claudible.paths import find_cudnn_lib
+
+    # Ensure cuDNN is discoverable (systemd service sets this too, but
+    # direct CLI invocation needs it as well).
+    cudnn_path = find_cudnn_lib()
+    if cudnn_path:
+        existing = os.environ.get("LD_LIBRARY_PATH", "")
+        if cudnn_path not in existing:
+            os.environ["LD_LIBRARY_PATH"] = f"{cudnn_path}:{existing}" if existing else cudnn_path
 
     if is_running():
         pid = read_pid()
@@ -123,14 +136,18 @@ def start() -> None:
         click.echo("GUI deps not installed. Install with: pip install claudible[gui]", err=True)
         sys.exit(1)
 
-    click.echo("Launching tray icon...")
+    click.echo("Launching tray icon (foreground — Ctrl+C to stop)...")
+    click.echo("  Tip: use `systemctl --user start claudible` for background mode")
     app = TrayApp()
     app.run()
 
 
 @main.command()
 def stop() -> None:
-    """Stop the running claudible process."""
+    """Stop the running claudible process.
+
+    Prefer `systemctl --user stop claudible` for systemd-managed instances.
+    """
     from claudible.config import Config
     from claudible.lifecycle import is_running, stop_running
     from claudible.tts.client import TTSClient
@@ -159,7 +176,7 @@ def stop() -> None:
 @main.command()
 @click.pass_context
 def restart(ctx: click.Context) -> None:
-    """Restart claudible (stop + start via systemd or background process)."""
+    """Restart claudible. Uses systemd if available, otherwise background process."""
     import shutil
     import subprocess
     import time
@@ -458,6 +475,170 @@ def windows_clear() -> None:
 
     clear_all_windows()
     click.echo("All window registrations cleared.")
+
+
+@main.group()
+def container() -> None:
+    """Manage the bundled Ollama container."""
+
+
+@container.command("start")
+def container_start() -> None:
+    """Start the Ollama container."""
+    from claudible.config import Config
+    from claudible.container.ollama import _wait_for_ready, start_container
+
+    cfg = Config.load()
+    click.echo(f"Starting Ollama container on port {cfg.container.port}...")
+    ok = start_container(cfg.container.port, cfg.container.gpu)
+    if not ok:
+        click.echo("Failed to start container.", err=True)
+        sys.exit(1)
+    click.echo("Waiting for Ollama to become ready...")
+    ready = _wait_for_ready(cfg.container.port, 30.0)
+    if ready:
+        click.echo("Ollama container is ready.")
+    else:
+        click.echo("Container started but not yet responding.", err=True)
+
+
+@container.command("stop")
+def container_stop() -> None:
+    """Stop the Ollama container."""
+    from claudible.container.ollama import stop_container
+
+    ok = stop_container()
+    if ok:
+        click.echo("Ollama container stopped.")
+    else:
+        click.echo("Failed to stop container.", err=True)
+        sys.exit(1)
+
+
+@container.command("status")
+def container_status_cmd() -> None:
+    """Show container status and models."""
+    from claudible.config import Config
+    from claudible.container.ollama import container_status, health_check, list_models
+
+    cfg = Config.load()
+    port = cfg.container.port
+    status = container_status()
+    click.echo(f"  Container:  {status['status']}")
+    click.echo(f"  Port:       {port}")
+    click.echo(f"  Managed:    {'yes' if cfg.container.managed else 'no'}")
+
+    if status["running"]:
+        healthy = health_check(port)
+        click.echo(f"  Healthy:    {'yes' if healthy else 'no'}")
+        if healthy:
+            models = list_models(port)
+            if models:
+                click.echo("  Models:")
+                for m in models:
+                    click.echo(f"    - {m.get('name', '?')}")
+            else:
+                click.echo("  Models:     (none)")
+
+
+@container.command("pull")
+@click.argument("model")
+def container_pull(model: str) -> None:
+    """Pull a model into the running container."""
+    from claudible.config import Config
+    from claudible.container.ollama import pull_model
+
+    cfg = Config.load()
+    click.echo(f"Pulling {model}...")
+    ok = pull_model(model, cfg.container.port)
+    if ok:
+        click.echo(f"Model {model} pulled successfully.")
+    else:
+        click.echo(f"Failed to pull {model}.", err=True)
+        sys.exit(1)
+
+
+@container.command("enable")
+def container_enable() -> None:
+    """Enable managed container mode, start container, and pull models."""
+    from claudible.config import Config
+    from claudible.container.ollama import (
+        _wait_for_ready,
+        ensure_model,
+        health_check,
+        start_container,
+    )
+
+    cfg = Config.load()
+    cfg.container.managed = True
+    cfg.correction.enabled = True
+    cfg.save()
+
+    port = cfg.container.port
+    click.echo(f"Managed container enabled on port {port}.")
+
+    if not health_check(port):
+        click.echo("Starting Ollama container...")
+        ok = start_container(port, cfg.container.gpu)
+        if not ok:
+            click.echo("Failed to start container.", err=True)
+            sys.exit(1)
+        click.echo("Waiting for Ollama...")
+        if not _wait_for_ready(port, 30.0):
+            click.echo("Container not responding.", err=True)
+            sys.exit(1)
+
+    click.echo(f"Pulling correction model: {cfg.container.correction_model}")
+    ensure_model(cfg.container.correction_model, port)
+    click.echo(f"Pulling rephrase model: {cfg.container.rephrase_model}")
+    ensure_model(cfg.container.rephrase_model, port)
+    click.echo("All models ready. STT correction is now enabled.")
+
+
+@main.group()
+def accuracy() -> None:
+    """STT correction accuracy tracking."""
+
+
+@accuracy.command("report")
+def accuracy_report() -> None:
+    """Show accuracy statistics."""
+    from claudible.stt.accuracy import compute_stats, read_log
+
+    entries = read_log()
+    if not entries:
+        click.echo("No correction data yet.")
+        return
+    stats = compute_stats(entries)
+    click.echo(f"  Total corrections:  {stats['total']}")
+    click.echo(f"  Changed:            {stats['changed']} ({stats['change_rate']}%)")
+    click.echo(f"  Avg latency:        {stats['avg_latency_ms']}ms")
+    click.echo(f"  P50 latency:        {stats['p50_latency_ms']}ms")
+    click.echo(f"  P95 latency:        {stats['p95_latency_ms']}ms")
+
+
+@accuracy.command("tail")
+@click.option("-n", "--count", default=10, help="Number of entries to show")
+def accuracy_tail(count: int) -> None:
+    """Show recent correction entries."""
+    from claudible.stt.accuracy import read_log
+
+    entries = read_log(count)
+    if not entries:
+        click.echo("No correction data yet.")
+        return
+    for e in entries:
+        changed = "*" if e.was_changed else " "
+        click.echo(f"  {changed} {e.raw!r} → {e.corrected!r}  ({e.latency_ms}ms)")
+
+
+@accuracy.command("clear")
+def accuracy_clear() -> None:
+    """Clear the accuracy log."""
+    from claudible.stt.accuracy import clear_log
+
+    clear_log()
+    click.echo("Accuracy log cleared.")
 
 
 @main.group()

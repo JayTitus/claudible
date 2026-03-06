@@ -83,6 +83,22 @@ class RephraseConfig(BaseModel):
     persona_voices: dict[str, str] = Field(default_factory=dict)  # persona → voice name
 
 
+class CorrectionConfig(BaseModel):
+    enabled: bool = False
+    api_url: str = ""  # empty = use container or default Ollama
+    model: str = "llama3.2:1b"
+    timeout_ms: int = 1500
+    log_enabled: bool = True
+
+
+class ContainerConfig(BaseModel):
+    managed: bool = False
+    gpu: bool = True
+    correction_model: str = "llama3.2:1b"
+    rephrase_model: str = "llama3.2:3b"
+    port: int = 11435
+
+
 class CompletionConfig(BaseModel):
     mode: str = "none"  # "none" / "simple" / "persona"
     simple_phrase: str = "Done."
@@ -100,6 +116,8 @@ class Config(BaseModel):
     stt: STTConfig = Field(default_factory=STTConfig)
     dictation: DictationConfig = Field(default_factory=DictationConfig)
     rephrase: RephraseConfig = Field(default_factory=RephraseConfig)
+    correction: CorrectionConfig = Field(default_factory=CorrectionConfig)
+    container: ContainerConfig = Field(default_factory=ContainerConfig)
     completion: CompletionConfig = Field(default_factory=CompletionConfig)
     hook: HookConfig = Field(default_factory=HookConfig)
 

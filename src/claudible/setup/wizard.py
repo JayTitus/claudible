@@ -248,9 +248,62 @@ def _step_install_rnnoise(auto_yes: bool) -> None:
         click.echo("  Skipped. Install later with: claudible install")
 
 
+def _step_configure_container(auto_yes: bool) -> None:
+    """Step 8: Offer managed Ollama container for STT correction + rephrase."""
+    _header("Step 8: Ollama Container (STT Correction & Rephrase)")
+
+    import shutil
+
+    if not shutil.which("podman"):
+        click.echo("  Podman not found — skipping container setup.")
+        click.echo("  Install podman for automatic STT correction: sudo apt install podman")
+        return
+
+    click.echo("  Podman is available. A managed Ollama container provides:")
+    click.echo("    - STT correction (fixes VOSK transcription errors)")
+    click.echo("    - Rephrase (persona voice for Claude responses)")
+    click.echo("  Models: ~4GB total (llama3.2:1b + llama3.2:3b)")
+    click.echo()
+
+    if auto_yes or click.confirm("Enable managed Ollama container?", default=True):
+        from claudible.config import Config
+        from claudible.container.ollama import (
+            _wait_for_ready,
+            ensure_model,
+            health_check,
+            start_container,
+        )
+
+        cfg = Config.load()
+        cfg.container.managed = True
+        cfg.correction.enabled = True
+        cfg.save()
+
+        port = cfg.container.port
+
+        if not health_check(port):
+            click.echo("  Starting Ollama container...")
+            ok = start_container(port, cfg.container.gpu)
+            if not ok:
+                click.echo(click.style("  Container start failed. You can retry later.", fg="yellow"))
+                return
+            click.echo("  Waiting for Ollama...")
+            if not _wait_for_ready(port, 30.0):
+                click.echo(click.style("  Container not responding. Retry: claudible container enable", fg="yellow"))
+                return
+
+        click.echo(f"  Pulling correction model: {cfg.container.correction_model}")
+        ensure_model(cfg.container.correction_model, port)
+        click.echo(f"  Pulling rephrase model: {cfg.container.rephrase_model}")
+        ensure_model(cfg.container.rephrase_model, port)
+        click.echo(click.style("  Ollama container ready. STT correction enabled.", fg="green"))
+    else:
+        click.echo("  Skipped. Enable later with: claudible container enable")
+
+
 def _step_install_daemon(auto_yes: bool) -> None:
-    """Step 8: Install and start systemd daemon."""
-    _header("Step 8: Systemd Daemon")
+    """Step 9: Install and start systemd daemon."""
+    _header("Step 9: Systemd Daemon")
 
     import subprocess
 
@@ -386,7 +439,10 @@ def run_wizard(auto_yes: bool = False, skip_gpu: bool = False) -> None:
     # Step 7: RNNoise
     _step_install_rnnoise(auto_yes)
 
-    # Step 8: Daemon
+    # Step 8: Ollama container
+    _step_configure_container(auto_yes)
+
+    # Step 9: Daemon
     _step_install_daemon(auto_yes)
 
     # Summary

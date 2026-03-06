@@ -61,6 +61,8 @@ class ConfigPatch(BaseModel):
     stt: dict | None = None
     rephrase: dict | None = None
     dictation: dict | None = None
+    correction: dict | None = None
+    container: dict | None = None
     completion: dict | None = None
     hook: dict | None = None
 
@@ -87,7 +89,7 @@ async def get_config():
 
 @router.patch("/config/{section}")
 async def patch_config(section: str, body: dict):
-    if section not in ("tts", "stt", "rephrase", "dictation", "completion", "hook"):
+    if section not in ("tts", "stt", "rephrase", "dictation", "correction", "container", "completion", "hook"):
         raise HTTPException(400, f"Unknown config section: {section}")
     cfg = Config.load()
     sub = getattr(cfg, section)
@@ -96,8 +98,8 @@ async def patch_config(section: str, body: dict):
             setattr(sub, key, value)
     cfg.save()
 
-    # Regenerate nerd-dictation callback when dictation/stt settings change
-    if section in ("dictation", "stt"):
+    # Regenerate nerd-dictation callback when dictation/stt/correction settings change
+    if section in ("dictation", "stt", "correction"):
         try:
             from claudible.stt.callback import generate_callback
 
@@ -128,6 +130,7 @@ def _check_missing_system_deps() -> list[str]:
         "make": "build-essential",
         "git": "git",
         "nerd-dictation": "nerd-dictation (see README)",
+        "podman": "podman",
     }
     missing = []
     for tool, pkg in checks.items():
@@ -702,6 +705,132 @@ async def windows_clear():
     from claudible.stt.windows import clear_all_windows
 
     clear_all_windows()
+    return {"ok": True}
+
+
+# ── STT Correction ─────────────────────────────────────────────────────────
+
+
+class CorrectionBody(BaseModel):
+    text: str
+
+
+@router.post("/correct")
+async def correct_text(body: CorrectionBody):
+    """Correct STT transcription via LLM. Called by the nerd-dictation callback."""
+    cfg = Config.load()
+    if not cfg.correction.enabled:
+        return {"text": body.text, "corrected": False}
+
+    from claudible.stt.corrector import correct_text as do_correct
+
+    result = await do_correct(body.text, cfg)
+    return {"text": result, "corrected": result != body.text}
+
+
+# ── Container ──────────────────────────────────────────────────────────────
+
+
+@router.get("/container")
+async def container_info():
+    """Get container status and model list."""
+    from claudible.container.ollama import container_status, health_check, list_models
+
+    cfg = Config.load()
+    port = cfg.container.port
+    status = container_status()
+    healthy = health_check(port) if status["running"] else False
+    models = list_models(port) if healthy else []
+    return {
+        **status,
+        "healthy": healthy,
+        "port": port,
+        "managed": cfg.container.managed,
+        "models": [{"name": m.get("name", "?")} for m in models],
+    }
+
+
+@router.post("/container/start")
+async def container_start():
+    """Start the Ollama container."""
+    import asyncio
+
+    from claudible.container.ollama import start_container, _wait_for_ready
+
+    cfg = Config.load()
+    ok = await asyncio.to_thread(start_container, cfg.container.port, cfg.container.gpu)
+    if not ok:
+        raise HTTPException(500, "Failed to start container")
+    # Wait for it to become ready
+    ready = await asyncio.to_thread(_wait_for_ready, cfg.container.port, 30.0)
+    return {"ok": True, "ready": ready}
+
+
+@router.post("/container/stop")
+async def container_stop():
+    """Stop the Ollama container."""
+    import asyncio
+
+    from claudible.container.ollama import stop_container
+
+    ok = await asyncio.to_thread(stop_container)
+    return {"ok": ok}
+
+
+@router.post("/container/pull")
+async def container_pull(body: dict):
+    """Pull a model into the running container."""
+    import asyncio
+
+    from claudible.container.ollama import pull_model
+
+    model = body.get("model", "")
+    if not model:
+        raise HTTPException(400, "model is required")
+    cfg = Config.load()
+    ok = await asyncio.to_thread(pull_model, model, cfg.container.port)
+    if not ok:
+        raise HTTPException(500, f"Failed to pull model: {model}")
+    return {"ok": True, "model": model}
+
+
+# ── Accuracy ───────────────────────────────────────────────────────────────
+
+
+@router.get("/accuracy/stats")
+async def accuracy_stats():
+    """Get STT correction accuracy statistics."""
+    from claudible.stt.accuracy import compute_stats, read_log
+
+    entries = read_log()
+    return compute_stats(entries)
+
+
+@router.get("/accuracy/recent")
+async def accuracy_recent(limit: int = 20):
+    """Get recent correction entries."""
+    from claudible.stt.accuracy import read_log
+
+    limit = min(limit, 200)
+    entries = read_log(limit)
+    return [
+        {
+            "timestamp": e.timestamp,
+            "raw": e.raw,
+            "corrected": e.corrected,
+            "latency_ms": e.latency_ms,
+            "was_changed": e.was_changed,
+        }
+        for e in entries
+    ]
+
+
+@router.delete("/accuracy")
+async def accuracy_clear():
+    """Clear the accuracy log."""
+    from claudible.stt.accuracy import clear_log
+
+    clear_log()
     return {"ok": True}
 
 

@@ -90,6 +90,16 @@ async function loadDashboard() {
     document.getElementById("dash-hook-mode").textContent = c.hook?.mode || "full";
     document.getElementById("dash-input").innerHTML = badge(s.input_group, "bool");
     document.getElementById("dash-rnnoise").innerHTML = badge(s.rnnoise_active, "bool");
+    document.getElementById("dash-correction").innerHTML = badge(c.correction?.enabled, "bool");
+    // Container status on dashboard
+    try {
+      const ctr = await api("GET", "/container");
+      document.getElementById("dash-container").innerHTML = ctr.running
+        ? '<span class="badge badge-yes">Running</span>'
+        : '<span class="badge badge-no">Off</span>';
+    } catch (e) {
+      document.getElementById("dash-container").innerHTML = '<span class="badge badge-no">N/A</span>';
+    }
 
     // Missing deps banner
     const banner = document.getElementById("dash-deps-banner");
@@ -741,6 +751,12 @@ async function loadSTT() {
   document.getElementById("stt-rnnoise-retro").value = cfg.stt.rnnoise_retroactive_ms ?? 100;
   document.getElementById("stt-echo-cancel").checked = cfg.stt.echo_cancellation ?? false;
 
+  // Correction settings
+  document.getElementById("stt-correction-enabled").checked = cfg.correction?.enabled ?? false;
+  document.getElementById("stt-correction-model").value = cfg.correction?.model ?? "llama3.2:1b";
+  document.getElementById("stt-correction-timeout").value = cfg.correction?.timeout_ms ?? 1500;
+  document.getElementById("stt-correction-log").checked = cfg.correction?.log_enabled ?? true;
+
   // Load window slots
   await loadWindowSlots();
 
@@ -952,6 +968,12 @@ document.getElementById("stt-save").addEventListener("click", async () => {
       api("PATCH", "/config/dictation", {
         keywords: currentKeywords,
       }),
+      api("PATCH", "/config/correction", {
+        enabled: document.getElementById("stt-correction-enabled").checked,
+        model: document.getElementById("stt-correction-model").value.trim() || "llama3.2:1b",
+        timeout_ms: parseInt(document.getElementById("stt-correction-timeout").value) || 1500,
+        log_enabled: document.getElementById("stt-correction-log").checked,
+      }),
     ]);
     cfg = null;
 
@@ -1060,6 +1082,144 @@ document.getElementById("stt-window-clear").addEventListener("click", async () =
   } catch (e) { toast("Failed: " + e.message, false); }
 });
 
+/* ── Container ──────────────────────────────────────────────────────────── */
+
+async function loadContainer() {
+  const [info, c] = await Promise.all([
+    api("GET", "/container").catch(() => ({ running: false, status: "error", healthy: false, port: 11435, managed: false, models: [] })),
+    loadConfig(),
+  ]);
+
+  document.getElementById("container-status").innerHTML = info.running
+    ? '<span class="badge badge-yes">Running</span>'
+    : '<span class="badge badge-no">' + esc(info.status) + '</span>';
+  document.getElementById("container-healthy").innerHTML = badge(info.healthy, "bool");
+  document.getElementById("container-port").textContent = info.port;
+
+  document.getElementById("container-managed").checked = cfg.container?.managed ?? false;
+  document.getElementById("container-gpu").checked = cfg.container?.gpu ?? true;
+  document.getElementById("container-correction-model").value = cfg.container?.correction_model ?? "llama3.2:1b";
+  document.getElementById("container-rephrase-model").value = cfg.container?.rephrase_model ?? "llama3.2:3b";
+  document.getElementById("container-port-input").value = cfg.container?.port ?? 11435;
+
+  // Models list
+  const modelsList = document.getElementById("container-models-list");
+  if (info.models && info.models.length > 0) {
+    modelsList.innerHTML = info.models.map(m =>
+      `<div class="status-row"><span>${esc(m.name)}</span></div>`
+    ).join("");
+  } else {
+    modelsList.innerHTML = '<span style="font-size:0.85rem; color:var(--text-muted);">No models loaded.</span>';
+  }
+
+  // Accuracy stats
+  await loadAccuracy();
+}
+
+async function loadAccuracy() {
+  try {
+    const [stats, recent] = await Promise.all([
+      api("GET", "/accuracy/stats"),
+      api("GET", "/accuracy/recent?limit=20"),
+    ]);
+    document.getElementById("accuracy-total").textContent = stats.total;
+    document.getElementById("accuracy-changed").textContent = stats.changed;
+    document.getElementById("accuracy-rate").textContent = stats.change_rate + "%";
+    document.getElementById("accuracy-avg").textContent = stats.avg_latency_ms + "ms";
+    document.getElementById("accuracy-p50").textContent = stats.p50_latency_ms + "ms";
+    document.getElementById("accuracy-p95").textContent = stats.p95_latency_ms + "ms";
+
+    const recentEl = document.getElementById("accuracy-recent");
+    if (recent.length === 0) {
+      recentEl.textContent = "No corrections logged yet.";
+    } else {
+      recentEl.textContent = recent.map(e => {
+        const marker = e.was_changed ? "*" : " ";
+        return `${marker} ${JSON.stringify(e.raw)} → ${JSON.stringify(e.corrected)}  (${e.latency_ms}ms)`;
+      }).join("\n");
+    }
+  } catch (e) {
+    document.getElementById("accuracy-total").textContent = "--";
+  }
+}
+
+document.getElementById("container-start-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("container-start-btn");
+  const status = document.getElementById("container-action-status");
+  btn.disabled = true;
+  btn.textContent = "Starting...";
+  status.style.display = "";
+  status.textContent = "Starting Ollama container...";
+  try {
+    const res = await api("POST", "/container/start");
+    status.textContent = res.ready ? "Container started and ready." : "Container started (warming up).";
+    toast("Container started");
+    loadContainer();
+  } catch (e) {
+    status.textContent = "Failed: " + e.message;
+    toast("Start failed", false);
+  }
+  btn.disabled = false;
+  btn.textContent = "Start";
+});
+
+document.getElementById("container-stop-btn").addEventListener("click", async () => {
+  try {
+    await api("POST", "/container/stop");
+    toast("Container stopped");
+    loadContainer();
+  } catch (e) { toast("Stop failed: " + e.message, false); }
+});
+
+document.getElementById("container-refresh-btn").addEventListener("click", loadContainer);
+
+document.getElementById("container-save").addEventListener("click", async () => {
+  try {
+    await api("PATCH", "/config/container", {
+      managed: document.getElementById("container-managed").checked,
+      gpu: document.getElementById("container-gpu").checked,
+      correction_model: document.getElementById("container-correction-model").value.trim() || "llama3.2:1b",
+      rephrase_model: document.getElementById("container-rephrase-model").value.trim() || "llama3.2:3b",
+      port: parseInt(document.getElementById("container-port-input").value) || 11435,
+    });
+    cfg = null;
+    toast("Container settings saved");
+  } catch (e) { toast("Save failed: " + e.message, false); }
+});
+
+document.getElementById("container-pull-btn").addEventListener("click", async () => {
+  const model = document.getElementById("container-pull-model").value.trim();
+  if (!model) { toast("Enter a model name", false); return; }
+  const btn = document.getElementById("container-pull-btn");
+  const status = document.getElementById("container-pull-status");
+  btn.disabled = true;
+  btn.textContent = "Pulling...";
+  status.style.display = "";
+  status.textContent = `Pulling ${model}... (this may take a while)`;
+  try {
+    await api("POST", "/container/pull", { model });
+    status.textContent = `Model ${model} pulled successfully.`;
+    toast("Model pulled");
+    document.getElementById("container-pull-model").value = "";
+    loadContainer();
+  } catch (e) {
+    status.textContent = "Pull failed: " + e.message;
+    toast("Pull failed", false);
+  }
+  btn.disabled = false;
+  btn.textContent = "Pull Model";
+});
+
+document.getElementById("accuracy-refresh-btn").addEventListener("click", loadAccuracy);
+
+document.getElementById("accuracy-clear-btn").addEventListener("click", async () => {
+  try {
+    await api("DELETE", "/accuracy");
+    toast("Accuracy log cleared");
+    loadAccuracy();
+  } catch (e) { toast("Clear failed: " + e.message, false); }
+});
+
 /* ── Output ─────────────────────────────────────────────────────────────── */
 
 async function loadOutput() {
@@ -1129,6 +1289,7 @@ const loaders = {
   rephrase: loadRephrase,
   personas: loadPersonas,
   stt: loadSTT,
+  container: loadContainer,
   output: loadOutput,
   logs: loadLogs,
 };

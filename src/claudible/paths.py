@@ -11,16 +11,18 @@ CACHE_DIR = Path.home() / ".cache" / "claudible"
 
 VOICES_DIR = DATA_DIR / "voices"
 EMBEDDINGS_DIR = CACHE_DIR / "embeddings"
+OLLAMA_DATA_DIR = DATA_DIR / "ollama"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 TTS_MUTE_FLAG = CACHE_DIR / "tts_muted"
 PID_FILE = CACHE_DIR / "claudible.pid"
 WAKEWORD_STATE = CACHE_DIR / "wakeword.json"
 WINDOW_STATE = CACHE_DIR / "windows.json"
+STT_ACCURACY_LOG = CACHE_DIR / "stt_accuracy.jsonl"
 
 
 def ensure_dirs() -> None:
     """Create all required directories."""
-    for d in (CONFIG_DIR, DATA_DIR, VOICES_DIR, EMBEDDINGS_DIR):
+    for d in (CONFIG_DIR, DATA_DIR, VOICES_DIR, EMBEDDINGS_DIR, OLLAMA_DATA_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 

@@ -49,6 +49,31 @@ async def lifespan(app: FastAPI):
     config = Config.load()
     engine = TTSEngine(model_name=config.tts.model)
     engine.load()
+
+    # Start managed Ollama container if configured
+    if config.container.managed:
+        try:
+            from claudible.container.ollama import (
+                _wait_for_ready,
+                ensure_model,
+                health_check,
+                start_container,
+            )
+
+            port = config.container.port
+            if not health_check(port):
+                log.info("Starting managed Ollama container...")
+                start_container(port, config.container.gpu)
+                _wait_for_ready(port, 30.0)
+
+            if health_check(port):
+                log.info("Ensuring correction model: %s", config.container.correction_model)
+                ensure_model(config.container.correction_model, port)
+                log.info("Ensuring rephrase model: %s", config.container.rephrase_model)
+                ensure_model(config.container.rephrase_model, port)
+        except Exception:
+            log.warning("Failed to start managed Ollama container", exc_info=True)
+
     _playback_queue = asyncio.Queue()
     worker = asyncio.create_task(_playback_worker())
     yield

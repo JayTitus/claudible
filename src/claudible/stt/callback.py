@@ -25,6 +25,8 @@ import json
 import os
 import subprocess
 import time
+import urllib.request
+import urllib.error
 
 # Voice keyword → X11 keystroke mappings
 KEYWORDS = {keywords_dict}
@@ -44,6 +46,10 @@ WAKEWORD_STATE_PATH = {wakeword_state_path}
 # Window lock configuration
 WINDOW_LOCK_ENABLED = {window_lock_enabled}
 WINDOW_STATE_PATH = {window_state_path}
+
+# STT correction configuration
+CORRECTION_ENABLED = {correction_enabled}
+TTS_SERVER_URL = {tts_server_url}
 
 # Deactivation phrases that return to sleeping state
 DEACTIVATION_PHRASES = ("stop listening", "go to sleep", "never mind", "nevermind")
@@ -136,6 +142,25 @@ def _write_window_state(state: dict) -> None:
         os.rename(tmp_path, WINDOW_STATE_PATH)
     except OSError:
         pass
+
+
+def _correct_via_server(text: str) -> str:
+    """POST text to claudible server for STT correction. Falls back to raw on error."""
+    if not CORRECTION_ENABLED or not TTS_SERVER_URL:
+        return text
+    try:
+        data = json.dumps({{"text": text}}).encode("utf-8")
+        req = urllib.request.Request(
+            TTS_SERVER_URL + "/api/correct",
+            data=data,
+            headers={{"Content-Type": "application/json"}},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            result = json.loads(resp.read())
+            return result.get("text", text)
+    except Exception:
+        return text
 
 
 def _send_key(key: str) -> None:
@@ -389,6 +414,9 @@ def nerd_dictation_process(text: str) -> str:
                 _xdotool_type_and_enter(d)
             return ""
 
+    # STT correction pass
+    text = _correct_via_server(text)
+
     _last_chunk = lower
     return _send_type(text)
 '''
@@ -408,14 +436,19 @@ def generate_callback(config: Config | None = None) -> Path:
     keywords = cfg.dictation.keywords
 
     # Build inverted trigger_words: trigger phrase → persona name
+    # Supports comma-separated variants: "system ai, system a i" → both map to persona
     trigger_words = {}
     for persona, trigger in cfg.rephrase.trigger_words.items():
-        if trigger.strip():
-            trigger_words[trigger.strip().lower()] = persona
+        for variant in trigger.split(","):
+            variant = variant.strip().lower()
+            if variant:
+                trigger_words[variant] = persona
 
     from claudible.paths import WAKEWORD_STATE, WINDOW_STATE
 
     CALLBACK_DIR.mkdir(parents=True, exist_ok=True)
+
+    tts_server_url = f"http://{cfg.tts.host}:{cfg.tts.port}"
 
     script = _TEMPLATE.format(
         keywords_dict=repr(keywords),
@@ -426,6 +459,8 @@ def generate_callback(config: Config | None = None) -> Path:
         wakeword_state_path=repr(str(WAKEWORD_STATE)),
         window_lock_enabled=repr(cfg.stt.window_lock_enabled),
         window_state_path=repr(str(WINDOW_STATE)),
+        correction_enabled=repr(cfg.correction.enabled),
+        tts_server_url=repr(tts_server_url),
     )
 
     CALLBACK_FILE.write_text(script, encoding="utf-8")

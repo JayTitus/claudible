@@ -54,11 +54,16 @@ pytest tests/
 ```
 
 ## CLI
+
+`claudible start` runs in the foreground (blocks). For background operation, use systemd:
+- `systemctl --user start claudible` / `stop` / `restart`
+- `claudible restart` auto-detects systemd and uses it when available
+
 ```
 claudible                        # Status overview (PID + server health)
-claudible start                  # Start TTS server + tray icon (singleton)
+claudible start                  # Start TTS server + tray icon (foreground, blocks)
 claudible stop                   # Stop the running process
-claudible restart                # Stop + start
+claudible restart                # Stop + start (prefers systemd if available)
 claudible config                 # Open browser config UI (localhost:5959/config)
 claudible ptt                    # Push-to-talk listener
 claudible speak "text"           # Send text to TTS
@@ -75,6 +80,14 @@ claudible personas delete NAME   # Delete custom persona
 claudible windows list           # Show registered window slots
 claudible windows register [N]   # Register focused window to slot (default: 1)
 claudible windows clear          # Clear all window registrations
+claudible container start        # Start Ollama container
+claudible container stop         # Stop Ollama container
+claudible container status       # Show container status + models
+claudible container pull MODEL   # Pull a model into the container
+claudible container enable       # Enable managed container + pull models
+claudible accuracy report        # Show STT correction stats
+claudible accuracy tail [-n N]   # Show recent corrections
+claudible accuracy clear         # Clear accuracy log
 claudible hooks install          # Install Claude Code hook
 claudible hooks uninstall        # Remove hook
 claudible install                # Full interactive setup

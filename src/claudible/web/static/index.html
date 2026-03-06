@@ -15,6 +15,7 @@
     <a href="#" class="nav-item" data-tab="rephrase">Rephrase</a>
     <a href="#" class="nav-item" data-tab="personas">Personas</a>
     <a href="#" class="nav-item" data-tab="stt">STT</a>
+    <a href="#" class="nav-item" data-tab="container">Container</a>
     <a href="#" class="nav-item" data-tab="output">Output</a>
     <a href="#" class="nav-item" data-tab="logs">Logs</a>
   </nav>
@@ -53,6 +54,8 @@
           <h3>Input</h3>
           <div class="status-row"><span>Input group</span><span id="dash-input" class="badge">--</span></div>
           <div class="status-row"><span>RNNoise</span><span id="dash-rnnoise" class="badge">--</span></div>
+          <div class="status-row"><span>STT correction</span><span id="dash-correction" class="badge">--</span></div>
+          <div class="status-row"><span>Container</span><span id="dash-container" class="badge">--</span></div>
         </div>
       </div>
     </section>
@@ -352,6 +355,34 @@
           <button id="stt-kw-add" class="btn btn-secondary btn-sm">Add</button>
         </div>
 
+        <h3 style="margin-top:1.25rem;">STT Correction</h3>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">
+          Uses a small LLM to fix VOSK transcription errors (wrong word boundaries, phonetic substitutions).
+          Requires Ollama (local or managed container).
+        </p>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="stt-correction-enabled">
+            <span>Enable STT correction</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="stt-correction-model">Correction Model</label>
+          <input type="text" id="stt-correction-model" placeholder="llama3.2:1b">
+          <small>Small model recommended for speed (80-300ms). Used only for fixing transcription.</small>
+        </div>
+        <div class="form-group">
+          <label for="stt-correction-timeout">Timeout (ms)</label>
+          <input type="number" id="stt-correction-timeout" min="500" max="5000" step="100" placeholder="1500">
+          <small>Falls back to raw text if correction takes longer than this.</small>
+        </div>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="stt-correction-log">
+            <span>Log corrections (for accuracy tracking)</span>
+          </label>
+        </div>
+
         <h3 style="margin-top:1.25rem;">Noise Suppression</h3>
         <div class="status-row" style="margin: 0.5rem 0;">
           <span>RNNoise installed</span>
@@ -391,6 +422,86 @@
           <small>Prevents TTS output from feeding back into the microphone. Uses PipeWire WebRTC AEC. Requires PipeWire restart.</small>
         </div>
         <button id="stt-save" class="btn btn-primary" style="margin-top: 1rem;">Save</button>
+      </div>
+    </section>
+
+    <!-- Container -->
+    <section id="tab-container" class="tab">
+      <h1>Ollama Container</h1>
+      <div class="card">
+        <h3>Status</h3>
+        <div class="status-row" style="margin-bottom:0.5rem;">
+          <span>Container</span>
+          <span id="container-status" class="badge">--</span>
+        </div>
+        <div class="status-row" style="margin-bottom:0.5rem;">
+          <span>Healthy</span>
+          <span id="container-healthy" class="badge">--</span>
+        </div>
+        <div class="status-row" style="margin-bottom:0.5rem;">
+          <span>Port</span>
+          <span id="container-port">--</span>
+        </div>
+        <div class="btn-row" style="margin-top:0.75rem;">
+          <button id="container-start-btn" class="btn btn-primary">Start</button>
+          <button id="container-stop-btn" class="btn btn-danger">Stop</button>
+          <button id="container-refresh-btn" class="btn btn-secondary">Refresh</button>
+        </div>
+        <div id="container-action-status" class="test-output" style="display:none;"></div>
+      </div>
+      <div class="card" style="margin-top:1rem;">
+        <h3>Configuration</h3>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="container-managed">
+            <span>Managed container (auto-start on daemon startup)</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="container-gpu">
+            <span>GPU acceleration</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="container-correction-model">Correction Model</label>
+          <input type="text" id="container-correction-model" placeholder="llama3.2:1b">
+        </div>
+        <div class="form-group">
+          <label for="container-rephrase-model">Rephrase Model</label>
+          <input type="text" id="container-rephrase-model" placeholder="llama3.2:3b">
+        </div>
+        <div class="form-group">
+          <label for="container-port-input">Port</label>
+          <input type="number" id="container-port-input" min="1024" max="65535" placeholder="11435">
+        </div>
+        <button id="container-save" class="btn btn-primary">Save</button>
+      </div>
+      <div class="card" style="margin-top:1rem;">
+        <h3>Models</h3>
+        <div id="container-models-list" style="margin-bottom:0.75rem;"></div>
+        <div class="input-row">
+          <input type="text" id="container-pull-model" placeholder="model name (e.g. llama3.2:1b)">
+          <button id="container-pull-btn" class="btn btn-secondary">Pull Model</button>
+        </div>
+        <div id="container-pull-status" class="test-output" style="display:none;"></div>
+      </div>
+      <div class="card" style="margin-top:1rem;">
+        <h3>STT Accuracy</h3>
+        <div id="accuracy-stats">
+          <div class="status-row"><span>Total corrections</span><span id="accuracy-total">--</span></div>
+          <div class="status-row"><span>Changed</span><span id="accuracy-changed">--</span></div>
+          <div class="status-row"><span>Change rate</span><span id="accuracy-rate">--</span></div>
+          <div class="status-row"><span>Avg latency</span><span id="accuracy-avg">--</span></div>
+          <div class="status-row"><span>P50 latency</span><span id="accuracy-p50">--</span></div>
+          <div class="status-row"><span>P95 latency</span><span id="accuracy-p95">--</span></div>
+        </div>
+        <h4 style="margin-top:1rem;">Recent Corrections</h4>
+        <div id="accuracy-recent" class="log-viewer" style="max-height:300px; overflow-y:auto; font-size:0.8rem;"></div>
+        <div class="btn-row" style="margin-top:0.75rem;">
+          <button id="accuracy-refresh-btn" class="btn btn-secondary">Refresh</button>
+          <button id="accuracy-clear-btn" class="btn btn-danger btn-sm">Clear Log</button>
+        </div>
       </div>
     </section>
 
