@@ -84,10 +84,10 @@ class RephraseConfig(BaseModel):
 
 
 class CorrectionConfig(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     api_url: str = ""  # empty = use container or default Ollama
-    model: str = "llama3.2:1b"
-    timeout_ms: int = 1500
+    model: str = "qwen2.5:3b"  # best instruction compliance for STT correction
+    timeout_ms: int = 2000
     log_enabled: bool = True
 
 
