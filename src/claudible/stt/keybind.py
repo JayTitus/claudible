@@ -1,4 +1,4 @@
-"""Keybinding listeners for STT using evdev."""
+"""Keybinding listeners for STT using evdev (Linux only)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,13 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from evdev import InputDevice, categorize, ecodes
+try:
+    from evdev import InputDevice, categorize, ecodes
+except ImportError:
+    raise ImportError(
+        "evdev is required for keyboard input on Linux. "
+        "Install with: pip install claudible[linux]"
+    )
 
 from claudible.config import Config
 from claudible.paths import WAKEWORD_STATE
@@ -131,6 +137,7 @@ def run_key_listener(
     ptt_on: Callable[[], None] | None = None,
     ptt_off: Callable[[], None] | None = None,
     wake_state_changed: Callable[[str], None] | None = None,
+    is_continuous: Callable[[], bool] | None = None,
 ) -> None:
     """Unified key listener for both PTT (hold) and continuous toggle.
 
@@ -146,6 +153,8 @@ def run_key_listener(
         ptt_on: Called when PTT key is pressed.
         ptt_off: Called when PTT key is released.
         wake_state_changed: Called when wake word state changes (receives 'awake' or 'sleeping').
+        is_continuous: Callable that returns whether continuous mode is active
+            (accounts for external sources like process watcher).
     """
     ptt_key_name = config.stt.push_to_talk_key
     toggle_key_name = config.stt.toggle_key
@@ -239,12 +248,11 @@ def run_key_listener(
                             dictation.stop()
                             continuous_off()
 
-                    # --- PTT key: hold-to-speak (only when not in continuous mode) ---
+                    # --- PTT key: hold-to-speak ---
                     if code == ptt_code and not continuous:
                         if state == key_event.key_down and not ptt_held:
                             ptt_held = True
                             log.info("PTT key down — starting dictation")
-                            # PTT bypasses wake word — force awake state
                             if wakeword_enabled:
                                 _write_wake_state("awake")
                             dictation.start()
@@ -254,7 +262,6 @@ def run_key_listener(
                             ptt_held = False
                             log.info("PTT key up — stopping dictation")
                             dictation.stop()
-                            # Return to sleeping when PTT released
                             if wakeword_enabled:
                                 _write_wake_state("sleeping")
                             if ptt_off:

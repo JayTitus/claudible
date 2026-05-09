@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import grp
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+try:
+    import grp
+except ImportError:
+    grp = None  # type: ignore[assignment]
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -19,15 +24,25 @@ from claudible.rephrase.personas import (
     is_custom,
     list_personas,
 )
-from claudible.stt.noise import (
-    disable_aec,
-    disable_rnnoise,
-    enable_aec,
-    enable_rnnoise,
-    is_aec_active,
-    is_rnnoise_active,
-    is_rnnoise_installed,
-)
+try:
+    from claudible.stt.noise import (
+        disable_aec,
+        disable_rnnoise,
+        enable_aec,
+        enable_rnnoise,
+        is_aec_active,
+        is_rnnoise_active,
+        is_rnnoise_installed,
+    )
+except ImportError:
+    # Noise suppression not available on this platform
+    def is_rnnoise_installed() -> bool: return False  # type: ignore[misc]
+    def is_rnnoise_active() -> bool: return False  # type: ignore[misc]
+    def is_aec_active() -> bool: return False  # type: ignore[misc]
+    def enable_rnnoise(**kw) -> bool: return False  # type: ignore[misc]
+    def disable_rnnoise() -> bool: return False  # type: ignore[misc]
+    def enable_aec() -> bool: return False  # type: ignore[misc]
+    def disable_aec() -> bool: return False  # type: ignore[misc]
 from claudible.paths import DATA_DIR, VOICES_DIR, WAKEWORD_STATE, WINDOW_STATE
 from claudible.tts.voices import (
     combine_samples,
@@ -78,6 +93,17 @@ class RephraseTestBody(BaseModel):
     persona: str | None = None
 
 
+# ── Platform capabilities ──────────────────────────────────────────────────
+
+
+@router.get("/capabilities")
+async def capabilities():
+    """Return which platform backends are available."""
+    from claudible.platform import available_backends
+
+    return available_backends()
+
+
 # ── Config ──────────────────────────────────────────────────────────────────
 
 
@@ -114,6 +140,8 @@ async def patch_config(section: str, body: dict):
 
 
 def _in_input_group() -> bool:
+    if grp is None:
+        return True  # Not applicable on non-Linux
     try:
         gid = grp.getgrnam("input").gr_gid
         return gid in os.getgroups()
@@ -511,6 +539,51 @@ async def wakeword_state():
         return {"state": "sleeping", "activated_at": 0.0}
 
 
+# ── STT state ─────────────────────────────────────────────────────────────
+
+# Callback for reading STT state from the tray app.
+_stt_state_callback: callable | None = None
+
+
+def register_stt_state(callback: callable) -> None:
+    """Register a callback that returns current STT state dict."""
+    global _stt_state_callback
+    _stt_state_callback = callback
+
+
+@router.get("/stt/state")
+async def stt_state():
+    """Return current STT input state for the config UI."""
+    from claudible.stt.windows import read_window_state, validate_window
+
+    # Get target windows
+    state = read_window_state()
+    windows = state.get("windows", {})
+    targets = []
+    for slot, entry in sorted(windows.items()):
+        wid = entry.get("window_id")
+        alive = validate_window(wid) if wid else False
+        targets.append({
+            "slot": slot,
+            "window_id": wid,
+            "title": entry.get("title", ""),
+            "process": entry.get("process"),
+            "pid": entry.get("pid"),
+            "alive": alive,
+        })
+
+    # Get tray state if available
+    tray_state = _stt_state_callback() if _stt_state_callback else {}
+
+    return {
+        "targets": targets,
+        "has_target": any(t["alive"] for t in targets),
+        "continuous": tray_state.get("continuous", False),
+        "ptt_held": tray_state.get("ptt_held", False),
+        "dictation_running": tray_state.get("dictation_running", False),
+    }
+
+
 # ── STT restart ───────────────────────────────────────────────────────────
 
 
@@ -665,11 +738,12 @@ async def windows_list():
 @router.get("/windows/watched")
 async def windows_watched():
     """Return watched process list and currently detected processes."""
-    from claudible.stt.procwatch import scan_proc_for_names
+    from claudible.platform import get_process_backend
 
     cfg = Config.load()
     names = cfg.stt.watched_processes
-    detected = scan_proc_for_names(names)
+    proc_backend = get_process_backend()
+    detected = proc_backend.scan_for_names(names) if proc_backend else []
     return {
         "watched_processes": names,
         "process_watch_interval": cfg.stt.process_watch_interval,
@@ -840,12 +914,27 @@ async def accuracy_clear():
 @router.get("/logs")
 async def logs(lines: int = 200):
     lines = min(lines, 2000)
-    try:
-        result = subprocess.run(
-            ["journalctl", "--user", "-u", "claudible", "-n", str(lines),
-             "--no-hostname", "--no-pager"],
-            capture_output=True, text=True, timeout=5,
-        )
-        return {"logs": result.stdout}
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {"logs": "(journalctl not available)"}
+
+    # Linux: journalctl
+    if sys.platform.startswith("linux"):
+        try:
+            result = subprocess.run(
+                ["journalctl", "--user", "-u", "claudible", "-n", str(lines),
+                 "--no-hostname", "--no-pager"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {"logs": result.stdout}
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+    # macOS: read launchd log file
+    if sys.platform == "darwin":
+        log_file = Path.home() / "Library" / "Logs" / "claudible" / "claudible.log"
+        try:
+            text = log_file.read_text(encoding="utf-8", errors="replace")
+            log_lines = text.splitlines()[-lines:]
+            return {"logs": "\n".join(log_lines)}
+        except (FileNotFoundError, OSError):
+            pass
+
+    return {"logs": "(logs not available on this platform)"}

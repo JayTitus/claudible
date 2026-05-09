@@ -249,6 +249,21 @@
     <!-- STT -->
     <section id="tab-stt" class="tab">
       <h1>Speech-to-Text Settings</h1>
+
+      <!-- Live STT Status -->
+      <div class="card" id="stt-status-card" style="margin-bottom:1rem;">
+        <h3 style="margin-top:0;">Input Status</h3>
+        <div class="status-row">
+          <span>Dictation</span>
+          <span id="stt-status-dictation" class="badge">--</span>
+        </div>
+        <div class="status-row">
+          <span>Mode</span>
+          <span id="stt-status-mode" class="badge">--</span>
+        </div>
+        <div id="stt-status-targets" style="margin-top:0.5rem;"></div>
+      </div>
+
       <div class="card">
         <div class="form-group">
           <label for="stt-ptt-key">Push-to-Talk Key</label>

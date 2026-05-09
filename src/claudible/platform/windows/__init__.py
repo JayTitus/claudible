@@ -1,0 +1,1 @@
+"""Windows platform stubs (future)."""

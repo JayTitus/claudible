@@ -17,9 +17,16 @@ def _header(title: str) -> None:
 def _step_checks(auto_yes: bool, skip_gpu: bool) -> bool:
     """Step 1: Run dependency checks."""
     _header("Step 1: Dependency Checks")
-    from claudible.setup.checks import run_all_checks
+    from claudible.platform import detect_platform, MACOS
 
-    passed, total = run_all_checks(auto_yes=auto_yes, skip_gpu=skip_gpu)
+    if detect_platform() == MACOS:
+        from claudible.setup.checks_macos import run_all_checks_macos
+
+        passed, total = run_all_checks_macos(auto_yes=auto_yes, skip_gpu=skip_gpu)
+    else:
+        from claudible.setup.checks import run_all_checks
+
+        passed, total = run_all_checks(auto_yes=auto_yes, skip_gpu=skip_gpu)
     return passed == total
 
 
@@ -227,7 +234,13 @@ def _step_install_voices() -> None:
 
 
 def _step_install_rnnoise(auto_yes: bool) -> None:
-    """Step 7: Build and install RNNoise LADSPA plugin."""
+    """Step 7: Build and install RNNoise LADSPA plugin (Linux only)."""
+    from claudible.platform import detect_platform, MACOS
+
+    if detect_platform() == MACOS:
+        # macOS has built-in Voice Isolation — skip RNNoise entirely
+        return
+
     _header("Step 7: RNNoise Noise Suppression")
 
     from claudible.stt.noise import install_rnnoise, is_rnnoise_installed
@@ -256,7 +269,11 @@ def _step_configure_container(auto_yes: bool) -> None:
 
     if not shutil.which("podman"):
         click.echo("  Podman not found — skipping container setup.")
-        click.echo("  Install podman for automatic STT correction: sudo apt install podman")
+        from claudible.platform import detect_platform, MACOS
+        if detect_platform() == MACOS:
+            click.echo("  Install podman for STT correction: brew install podman")
+        else:
+            click.echo("  Install podman for STT correction: sudo apt install podman")
         return
 
     click.echo("  Podman is available. A managed Ollama container provides:")
@@ -302,63 +319,83 @@ def _step_configure_container(auto_yes: bool) -> None:
 
 
 def _step_install_daemon(auto_yes: bool) -> None:
-    """Step 9: Install and start systemd daemon."""
-    _header("Step 9: Systemd Daemon")
+    """Step 9: Install background service (systemd on Linux, launchd on macOS)."""
+    from claudible.platform import get_daemon_backend
 
-    import subprocess
+    daemon = get_daemon_backend()
+    if daemon is None:
+        return
 
-    from claudible.paths import CONFIG_DIR
+    from claudible.platform import detect_platform, MACOS
 
-    service_file = CONFIG_DIR.parent.parent / "systemd" / "user" / "claudible.service"
+    if detect_platform() == MACOS:
+        _header("Step 9: Background Service (launchd)")
+    else:
+        _header("Step 9: Background Service (systemd)")
 
-    if service_file.exists():
-        result = subprocess.run(
-            ["systemctl", "--user", "is-enabled", "claudible"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            click.echo("  Daemon already installed and enabled.")
-            # Offer to restart in case config changed
-            if not auto_yes and click.confirm("  Restart the daemon with new config?", default=True):
-                subprocess.run(["systemctl", "--user", "restart", "claudible"], check=False)
-                click.echo(click.style("  Daemon restarted.", fg="green"))
-            return
+    if daemon.is_service_enabled():
+        click.echo("  Service already installed and enabled.")
+        if not auto_yes and click.confirm("  Restart with new config?", default=True):
+            daemon.stop_service()
+            daemon.start_service()
+            click.echo(click.style("  Service restarted.", fg="green"))
+        return
 
-    if auto_yes or click.confirm(
-        "Install claudible as a systemd daemon? (starts on login)", default=True
-    ):
-        # Reuse the daemon install logic from CLI
-        from claudible.paths import find_cudnn_lib
+    if detect_platform() == MACOS:
+        prompt = "Install claudible as a launchd agent?"
+    else:
+        prompt = "Install claudible as a systemd daemon? (starts on login)"
 
-        import importlib.resources
-
-        service_dest = Path.home() / ".config" / "systemd" / "user"
-        service_dest.mkdir(parents=True, exist_ok=True)
-        dest_file = service_dest / "claudible.service"
-
-        ref = importlib.resources.files("claudible.systemd").joinpath("claudible.service")
-        service_text = ref.read_text(encoding="utf-8")
-
-        cudnn_path = find_cudnn_lib()
-        if cudnn_path:
-            lines = service_text.splitlines()
-            insert_idx = None
-            for i, line in enumerate(lines):
-                if line.startswith("Environment="):
-                    insert_idx = i + 1
-            if insert_idx is not None:
-                lines.insert(insert_idx, f"Environment=LD_LIBRARY_PATH={cudnn_path}")
-                service_text = "\n".join(lines) + "\n"
-
-        dest_file.write_text(service_text, encoding="utf-8")
-
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-        subprocess.run(["systemctl", "--user", "enable", "claudible"], check=True)
-        subprocess.run(["systemctl", "--user", "start", "claudible"], check=True)
-        click.echo(click.style("  Daemon installed, enabled, and started.", fg="green"))
+    if auto_yes or click.confirm(prompt, default=True):
+        if detect_platform() != MACOS:
+            # Linux: install systemd unit file with cuDNN path
+            _install_systemd_service()
+        if daemon.start_service():
+            click.echo(click.style("  Service installed and started.", fg="green"))
+        else:
+            click.echo(click.style("  Service install failed.", fg="yellow"))
     else:
         click.echo("  Skipped. Start manually with: claudible start")
+
+
+def _install_systemd_service() -> None:
+    """Install the systemd unit file (Linux-specific helper)."""
+    import importlib.resources
+    import shutil
+    import subprocess
+
+    from claudible.paths import find_cudnn_lib
+
+    service_dest = Path.home() / ".config" / "systemd" / "user"
+    service_dest.mkdir(parents=True, exist_ok=True)
+    dest_file = service_dest / "claudible.service"
+
+    ref = importlib.resources.files("claudible.systemd").joinpath("claudible.service")
+    service_text = ref.read_text(encoding="utf-8")
+
+    # Resolve the actual claudible binary path (supports venv, uv tool, pipx, etc.)
+    claudible_bin = shutil.which("claudible")
+    if not claudible_bin:
+        # Fallback: try the common uv tool install location
+        fallback = Path.home() / ".local" / "bin" / "claudible"
+        claudible_bin = str(fallback) if fallback.exists() else str(fallback)
+    service_text = service_text.replace("@@CLAUDIBLE_BIN@@", claudible_bin)
+
+    cudnn_path = find_cudnn_lib()
+    if cudnn_path:
+        lines = service_text.splitlines()
+        insert_idx = None
+        for i, line in enumerate(lines):
+            if line.startswith("Environment="):
+                insert_idx = i + 1
+        if insert_idx is not None:
+            lines.insert(insert_idx, f"Environment=LD_LIBRARY_PATH={cudnn_path}")
+            service_text = "\n".join(lines) + "\n"
+
+    dest_file.write_text(service_text, encoding="utf-8")
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "claudible"], check=True)
 
 
 def _step_summary(voice_name: str | None, ptt_key: str, toggle_key: str) -> None:
@@ -420,14 +457,16 @@ def run_wizard(auto_yes: bool = False, skip_gpu: bool = False) -> None:
     cfg.save()
     click.echo(click.style("\n  Config saved.", fg="green"))
 
-    # Generate nerd-dictation callback script
-    try:
-        from claudible.stt.callback import generate_callback
+    # Generate nerd-dictation callback script (Linux only — macOS uses direct VOSK)
+    from claudible.platform import detect_platform, LINUX
+    if detect_platform() == LINUX:
+        try:
+            from claudible.stt.callback import generate_callback
 
-        generate_callback(cfg)
-        click.echo("  nerd-dictation callback generated.")
-    except Exception:
-        pass
+            generate_callback(cfg)
+            click.echo("  nerd-dictation callback generated.")
+        except Exception:
+            pass
 
     # Step 5: Test voice
     if not auto_yes:

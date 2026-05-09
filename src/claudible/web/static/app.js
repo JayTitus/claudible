@@ -1006,6 +1006,75 @@ document.getElementById("stt-save").addEventListener("click", async () => {
   } catch (e) { toast("Save failed: " + e.message, false); }
 });
 
+/* ── STT Status ────────────────────────────────────────────────────────── */
+
+async function pollSttState() {
+  try {
+    const state = await api("GET", "/stt/state");
+
+    // Dictation status
+    const dictEl = document.getElementById("stt-status-dictation");
+    if (state.ptt_held) {
+      dictEl.textContent = "Listening (PTT)";
+      dictEl.className = "badge badge-yes";
+    } else if (state.continuous) {
+      dictEl.textContent = "Continuous";
+      dictEl.className = "badge badge-yes";
+    } else if (state.dictation_running) {
+      dictEl.textContent = "Active";
+      dictEl.className = "badge badge-yes";
+    } else {
+      dictEl.textContent = "Idle";
+      dictEl.className = "badge";
+    }
+
+    // Mode
+    const modeEl = document.getElementById("stt-status-mode");
+    modeEl.textContent = state.continuous ? "Continuous" : "Push-to-Talk";
+    modeEl.className = "badge";
+
+    // Targets
+    const targetsEl = document.getElementById("stt-status-targets");
+    if (state.targets.length === 0) {
+      targetsEl.innerHTML = '<span style="font-size:0.85rem; color:var(--text-muted);">No target windows detected.</span>';
+    } else {
+      targetsEl.innerHTML = state.targets.map(t => {
+        const alive = t.alive ? "badge-yes" : "badge-no";
+        const proc = t.process ? ` <span class="badge badge-num" style="font-size:0.7rem;">${esc(t.process)} PID ${t.pid}</span>` : "";
+        return `<div class="status-row" style="font-size:0.85rem;">
+          <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(t.title)}">Slot ${esc(t.slot)}: ${esc(t.title)}</span>
+          ${proc}
+          <span class="badge ${alive}" style="font-size:0.75rem;">${t.alive ? "alive" : "gone"}</span>
+        </div>`;
+      }).join("");
+    }
+  } catch (e) {
+    // silently ignore polling failures
+  }
+}
+
+// Poll STT state every 2 seconds when the STT tab is visible
+let _sttPollInterval = null;
+function startSttPoll() {
+  if (!_sttPollInterval) {
+    pollSttState();
+    _sttPollInterval = setInterval(pollSttState, 2000);
+  }
+}
+function stopSttPoll() {
+  if (_sttPollInterval) {
+    clearInterval(_sttPollInterval);
+    _sttPollInterval = null;
+  }
+}
+// Start/stop polling based on tab visibility
+document.querySelectorAll("[data-tab]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.dataset.tab === "stt") startSttPoll();
+    else stopSttPoll();
+  });
+});
+
 /* ── Window Lock ───────────────────────────────────────────────────────── */
 
 async function loadWindowSlots() {

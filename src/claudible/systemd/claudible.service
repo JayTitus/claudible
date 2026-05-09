@@ -4,8 +4,8 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/claudible start
-ExecStop=%h/.local/bin/claudible stop
+ExecStart=@@CLAUDIBLE_BIN@@ start
+ExecStop=@@CLAUDIBLE_BIN@@ stop
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

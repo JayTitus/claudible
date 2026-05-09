@@ -4,22 +4,24 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 
-# Ensure GI_TYPELIB_PATH includes system typelibs (needed in venvs)
-_SYSTEM_TYPELIB = "/usr/lib/x86_64-linux-gnu/girepository-1.0"
-if os.path.isdir(_SYSTEM_TYPELIB):
-    existing = os.environ.get("GI_TYPELIB_PATH", "")
-    if _SYSTEM_TYPELIB not in existing:
-        parts = f"{_SYSTEM_TYPELIB}:{existing}" if existing else _SYSTEM_TYPELIB
-        os.environ["GI_TYPELIB_PATH"] = parts
+# Ensure GI_TYPELIB_PATH includes system typelibs (needed in venvs on Linux)
+if sys.platform.startswith("linux"):
+    _SYSTEM_TYPELIB = "/usr/lib/x86_64-linux-gnu/girepository-1.0"
+    if os.path.isdir(_SYSTEM_TYPELIB):
+        existing = os.environ.get("GI_TYPELIB_PATH", "")
+        if _SYSTEM_TYPELIB not in existing:
+            parts = f"{_SYSTEM_TYPELIB}:{existing}" if existing else _SYSTEM_TYPELIB
+            os.environ["GI_TYPELIB_PATH"] = parts
 
 import pystray  # noqa: E402 — must be after GI_TYPELIB_PATH setup
 
 from claudible.config import Config  # noqa: E402
 from claudible.gui.icons import icon_active, icon_error, icon_inactive, icon_listening  # noqa: E402
 from claudible.paths import CACHE_DIR, TTS_MUTE_FLAG, WAKEWORD_STATE  # noqa: E402
-from claudible.stt.dictation import Dictation  # noqa: E402
+from claudible.platform import get_keyboard_backend, get_process_backend, get_stt_backend  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -30,18 +32,30 @@ class TrayApp:
     def __init__(self) -> None:
         self.cfg = Config.load()
         self._stt_continuous = False  # Scroll Lock continuous mode
+        self._ptt_held = False  # PTT key currently pressed
         self._tts_enabled = not TTS_MUTE_FLAG.exists()
         self._server_healthy = False
         self._wakeword_state = "sleeping"
         self._key_stop_event = threading.Event()
         self._key_thread: threading.Thread | None = None
         self._health_stop = threading.Event()
-        self._dictation = Dictation(self.cfg)
         self._proc_watcher = None
+
+        # Use platform backends for keyboard, STT, and process watching
+        self._kb_backend = get_keyboard_backend()
+        self._proc_backend = get_process_backend()
+
+        stt_backend = get_stt_backend()
+        if stt_backend:
+            self._dictation = stt_backend.create_dictation(self.cfg)
+        else:
+            # Fallback: try direct import (Linux without platform extras)
+            from claudible.stt.dictation import Dictation
+            self._dictation = Dictation(self.cfg)
 
         self.icon = pystray.Icon(
             "claudible",
-            icon=icon_inactive(),
+            icon=icon_listening(),  # orange = ready for PTT input
             title="Claudible",
             menu=pystray.Menu(
                 pystray.MenuItem(
@@ -91,11 +105,12 @@ class TrayApp:
         # Start process watcher for auto window lock
         self._start_proc_watcher()
 
-        # Register STT restart callback so the web UI can trigger it
+        # Register callbacks so the web UI can read state and trigger restarts
         try:
-            from claudible.web.router import register_stt_restart
+            from claudible.web.router import register_stt_restart, register_stt_state
 
             register_stt_restart(self._restart_key_listener)
+            register_stt_state(self._get_stt_state)
         except Exception:
             pass
 
@@ -105,10 +120,13 @@ class TrayApp:
         """Start the process watcher if window lock is enabled and processes are configured."""
         if self.cfg.stt.window_lock_enabled and self.cfg.stt.watched_processes:
             try:
-                from claudible.stt.procwatch import ProcessWatcher
-
-                self._proc_watcher = ProcessWatcher(self.cfg, on_slots_changed=self._on_slots_changed)
-                self._proc_watcher.start()
+                if self._proc_backend:
+                    self._proc_watcher = self._proc_backend.create_watcher(
+                        self.cfg, on_slots_changed=self._on_slots_changed,
+                    )
+                    self._proc_watcher.start()
+                else:
+                    log.info("Process watching not available on this platform")
             except Exception:
                 log.exception("Failed to start process watcher")
 
@@ -119,15 +137,24 @@ class TrayApp:
             self._proc_watcher = None
 
     def _on_slots_changed(self, slot_count: int) -> None:
-        """Auto-toggle continuous STT when watched processes appear/disappear."""
-        if slot_count > 0 and not self._stt_continuous:
-            log.info("Watched process detected — auto-starting STT")
-            self._dictation.start()
-            self._on_continuous_on()
-        elif slot_count == 0 and self._stt_continuous:
-            log.info("No watched processes — auto-stopping STT")
-            self._dictation.stop()
-            self._on_continuous_off()
+        """Update state when watched processes appear/disappear.
+
+        Only registers target windows — does NOT auto-start dictation.
+        Dictation is controlled by PTT key or manual toggle.
+        """
+        if slot_count > 0:
+            log.info("Target window registered (%d slot(s))", slot_count)
+        else:
+            log.info("No target windows — cleared all slots")
+        self._update_icon()
+
+    def _get_stt_state(self) -> dict:
+        """Return current STT state for the web API."""
+        return {
+            "continuous": self._stt_continuous,
+            "ptt_held": self._ptt_held,
+            "dictation_running": self._dictation.is_running,
+        }
 
     def _restart_key_listener(self) -> None:
         """Stop and restart the key listener with fresh config."""
@@ -144,7 +171,12 @@ class TrayApp:
         self._stop_proc_watcher()
         # Reload config
         self.cfg = Config.load()
-        self._dictation = Dictation(self.cfg)
+        stt_backend = get_stt_backend()
+        if stt_backend:
+            self._dictation = stt_backend.create_dictation(self.cfg)
+        else:
+            from claudible.stt.dictation import Dictation
+            self._dictation = Dictation(self.cfg)
         # Restart key listener
         self._key_stop_event = threading.Event()
         self._key_thread = threading.Thread(target=self._run_key_listener, daemon=True)
@@ -155,18 +187,20 @@ class TrayApp:
 
     def _run_key_listener(self) -> None:
         try:
-            from claudible.stt.keybind import run_key_listener
-
-            run_key_listener(
-                config=self.cfg,
-                dictation=self._dictation,
-                continuous_on=self._on_continuous_on,
-                continuous_off=self._on_continuous_off,
-                ptt_on=self._on_ptt_on,
-                ptt_off=self._on_ptt_off,
-                stop_event=self._key_stop_event,
-                wake_state_changed=self._on_wake_state_changed,
-            )
+            if self._kb_backend:
+                self._kb_backend.run_key_listener(
+                    config=self.cfg,
+                    dictation=self._dictation,
+                    continuous_on=self._on_continuous_on,
+                    continuous_off=self._on_continuous_off,
+                    ptt_on=self._on_ptt_on,
+                    ptt_off=self._on_ptt_off,
+                    stop_event=self._key_stop_event,
+                    wake_state_changed=self._on_wake_state_changed,
+                    is_continuous=lambda: self._stt_continuous,
+                )
+            else:
+                log.warning("No keyboard backend available — key listener not started")
         except Exception:
             log.exception("Key listener thread error")
 
@@ -175,9 +209,7 @@ class TrayApp:
         self._stt_continuous = True
         if self.cfg.stt.wakeword_enabled:
             self._wakeword_state = "sleeping"
-            self.icon.icon = icon_listening()
-        else:
-            self.icon.icon = icon_active()
+        self.icon.icon = icon_listening()  # orange = ready, waiting for input
         self.icon.update_menu()
         log.info("STT continuous ON")
 
@@ -202,23 +234,26 @@ class TrayApp:
 
     def _on_ptt_on(self) -> None:
         """Called by key listener when PTT key is held down."""
-        self.icon.icon = icon_active()
+        self._ptt_held = True
+        self.icon.icon = icon_active()  # green = actively listening
         self.icon.update_menu()
 
     def _on_ptt_off(self) -> None:
         """Called by key listener when PTT key is released."""
-        if not self._stt_continuous:
-            self.icon.icon = icon_inactive()
-            self.icon.update_menu()
+        self._ptt_held = False
+        self.icon.icon = icon_listening()  # orange = ready for next PTT press
+        self.icon.update_menu()
 
     def _update_icon(self) -> None:
-        if self._stt_continuous:
-            if self.cfg.stt.wakeword_enabled and self._wakeword_state != "awake":
-                self.icon.icon = icon_listening()
+        if not self._server_healthy:
+            self.icon.icon = icon_inactive()  # gray = server not ready
+        elif self._stt_continuous:
+            if self.cfg.stt.wakeword_enabled and self._wakeword_state == "awake":
+                self.icon.icon = icon_active()  # green = actively transcribing
             else:
-                self.icon.icon = icon_active()
+                self.icon.icon = icon_listening()  # orange = ready, waiting for input
         else:
-            self.icon.icon = icon_inactive()
+            self.icon.icon = icon_listening()  # orange = ready for PTT
         self.icon.update_menu()
 
     def _toggle_stt_from_menu(self) -> None:

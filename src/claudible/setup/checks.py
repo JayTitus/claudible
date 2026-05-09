@@ -1,8 +1,7 @@
-"""Setup check/install functions for claudible."""
+"""Setup check/install functions for claudible (Linux-focused)."""
 
 from __future__ import annotations
 
-import grp
 import os
 import shutil
 import subprocess
@@ -12,6 +11,11 @@ from pathlib import Path
 from urllib.request import urlretrieve
 
 import click
+
+try:
+    import grp
+except ImportError:
+    grp = None  # type: ignore[assignment]  # Not available on macOS/Windows in all contexts
 
 # --- Helpers ---
 
@@ -313,13 +317,25 @@ def _get_gpu_info() -> str:
 
 def _get_ram_gb() -> float:
     """Get total system RAM in GB."""
+    # Linux: read /proc/meminfo
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
                     kb = int(line.split()[1])
                     return kb / (1024**2)
-    except Exception:
+    except (FileNotFoundError, OSError):
+        pass
+    # macOS: sysctl
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.strip()) / (1024**3)
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
     return 0.0
 

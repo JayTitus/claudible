@@ -60,8 +60,38 @@ REGISTER_PREFIXES = ("register window",)
 # Lookback buffer for split multi-word triggers
 _last_chunk = ""
 
-# Active window ID for current session (set from wake state slot)
-_active_window_id = None
+# Active target for current session (set from wake state slot or default)
+# Dict with keys: window_id, konsole_service, konsole_session (any may be None)
+_active_target = {{}}
+
+
+def _konsole_send_text(service: str, session: str, text: str) -> bool:
+    """Send text to a Konsole session via D-Bus. Returns True on success."""
+    try:
+        subprocess.Popen(
+            ["qdbus", service, session, "org.kde.konsole.Session.sendText", text],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def _konsole_send_key(service: str, session: str, key: str) -> bool:
+    """Send a keystroke to a Konsole session via D-Bus.
+
+    Maps common X11 key names to terminal escape sequences / characters.
+    """
+    key_map = {{
+        "Return": "\\n",
+        "Tab": "\\t",
+        "BackSpace": "\\x7f",
+        "Escape": "\\x1b",
+    }}
+    char = key_map.get(key)
+    if char is None:
+        return False
+    return _konsole_send_text(service, session, char)
 
 
 def _xdotool_key(key: str) -> None:
@@ -83,16 +113,6 @@ def _xdotool_type_to_window(wid: int, text: str) -> None:
         ["xdotool", "type", "--clearmodifiers", "--window", str(wid), text],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-
-
-def _xdotool_type_and_enter(digit: str) -> None:
-    """Type a digit then press Enter via xdotool."""
-    subprocess.Popen(
-        ["xdotool", "type", "--clearmodifiers", digit],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    time.sleep(0.05)
-    subprocess.Popen(["xdotool", "key", "Return"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _window_exists(wid: int) -> bool:
@@ -164,22 +184,35 @@ def _correct_via_server(text: str) -> str:
 
 
 def _send_key(key: str) -> None:
-    """Send a keystroke — to locked window if active, else focused window."""
-    if _active_window_id and _window_exists(_active_window_id):
-        _xdotool_key_to_window(_active_window_id, key)
+    """Send a keystroke — via Konsole D-Bus, xdotool to window, or focused window."""
+    svc = _active_target.get("konsole_service")
+    sess = _active_target.get("konsole_session")
+    if svc and sess:
+        if _konsole_send_key(svc, sess, key):
+            return
+
+    wid = _active_target.get("window_id")
+    if wid and _window_exists(wid):
+        _xdotool_key_to_window(wid, key)
     else:
         _xdotool_key(key)
 
 
 def _send_type(text: str) -> str:
-    """Type text — to locked window if active (returns ""), else return text for nerd-dictation."""
-    if _active_window_id:
-        if _window_exists(_active_window_id):
-            _xdotool_type_to_window(_active_window_id, text)
+    """Type text — via Konsole D-Bus, xdotool to window, or return for nerd-dictation default."""
+    svc = _active_target.get("konsole_service")
+    sess = _active_target.get("konsole_session")
+    if svc and sess:
+        if _konsole_send_text(svc, sess, text):
+            return ""
+
+    wid = _active_target.get("window_id")
+    if wid:
+        if _window_exists(wid):
+            _xdotool_type_to_window(wid, text)
             return ""
         else:
-            # Window gone — remove from state, fall through
-            _remove_dead_window(_active_window_id)
+            _remove_dead_window(wid)
     return text
 
 
@@ -194,21 +227,39 @@ def _remove_dead_window(wid: int) -> None:
         _write_window_state(state)
 
 
-def _resolve_window_id(slot: str) -> int | None:
-    """Look up window ID for a slot from windows.json."""
+def _resolve_target(slot: str) -> dict:
+    """Look up the target info for a slot from windows.json.
+
+    Returns dict with window_id, konsole_service, konsole_session (any may be None).
+    """
     if not WINDOW_LOCK_ENABLED:
-        return None
+        return {{}}
     state = _read_window_state()
     windows = state.get("windows", {{}})
     entry = windows.get(slot)
-    if entry:
-        wid = entry.get("window_id")
-        if wid and _window_exists(wid):
-            return wid
-        # Dead window — clean up
+    if not entry:
+        return {{}}
+
+    result = {{
+        "window_id": entry.get("window_id"),
+        "konsole_service": entry.get("konsole_service"),
+        "konsole_session": entry.get("konsole_session"),
+    }}
+
+    # Validate: check window still exists (if we have a window_id)
+    wid = result.get("window_id")
+    if wid and not _window_exists(wid):
         del windows[slot]
         _write_window_state(state)
-    return None
+        return {{}}
+
+    return result
+
+
+def _resolve_window_id(slot: str) -> int | None:
+    """Legacy wrapper — returns just window_id for backwards compat."""
+    target = _resolve_target(slot)
+    return target.get("window_id")
 
 
 def _read_wake_state() -> dict:
@@ -311,7 +362,7 @@ def nerd_dictation_process(text: str) -> str:
     Called by nerd-dictation with each recognized text chunk.
     Return the text to type, or empty string to suppress typing.
     """
-    global _last_chunk, _active_window_id
+    global _last_chunk, _active_target
     lower = text.strip().lower()
     words = lower.split()
 
@@ -323,14 +374,14 @@ def nerd_dictation_process(text: str) -> str:
         if state.get("state") == "awake":
             activated_at = state.get("activated_at", 0.0)
 
-            # Resolve window lock from wake state slot
+            # Resolve target from wake state slot
             wake_slot = state.get("slot", "1")
-            _active_window_id = _resolve_window_id(wake_slot)
+            _active_target = _resolve_target(wake_slot)
 
             # Check timeout
             if DEACTIVATION_TIMEOUT > 0 and (now - activated_at) > DEACTIVATION_TIMEOUT:
                 _write_wake_state("sleeping")
-                _active_window_id = None
+                _active_target = {{}}
                 _last_chunk = lower
                 return ""
 
@@ -346,7 +397,7 @@ def nerd_dictation_process(text: str) -> str:
                 if phrase in lower:
                     _write_wake_state("sleeping")
                     _last_chunk = ""
-                    _active_window_id = None
+                    _active_target = {{}}
                     # "submit" + sleep on deactivation
                     if "submit" in lower:
                         _send_key("Return")
@@ -359,7 +410,7 @@ def nerd_dictation_process(text: str) -> str:
             remainder, persona, slot = _check_trigger(text)
             if remainder or persona:
                 _write_wake_state("awake", now, persona, slot)
-                _active_window_id = _resolve_window_id(slot)
+                _active_target = _resolve_target(slot)
                 _last_chunk = ""
                 if remainder:
                     # Process the remainder through normal flow
@@ -373,11 +424,11 @@ def nerd_dictation_process(text: str) -> str:
                 return ""  # Suppress — still sleeping
 
     else:
-        # No wake word — resolve window from default slot if window lock enabled
+        # No wake word — resolve target from default slot if window lock enabled
         if WINDOW_LOCK_ENABLED:
-            _active_window_id = _resolve_window_id("1")
+            _active_target = _resolve_target("1")
         else:
-            _active_window_id = None
+            _active_target = {{}}
 
     # --- Normal processing (no wake word, or awake) ---
 
@@ -387,31 +438,22 @@ def nerd_dictation_process(text: str) -> str:
         # "submit"/"enter" while wake word is active → send Enter + go back to sleeping
         if WAKEWORD_ENABLED and KEYWORDS[lower] == "Return":
             _write_wake_state("sleeping")
-            _active_window_id = None
+            _active_target = {{}}
             _last_chunk = ""
         return ""
 
     # Two-word option selection: "select 2", "option three", etc.
     if len(words) == 2 and words[0] in OPTION_PREFIXES:
         digit = words[1]
-        # Try direct digit
         if digit.isdigit():
-            if _active_window_id and _window_exists(_active_window_id):
-                _xdotool_type_to_window(_active_window_id, digit)
-                time.sleep(0.05)
-                _xdotool_key_to_window(_active_window_id, "Return")
-            else:
-                _xdotool_type_and_enter(digit)
+            _send_type(digit)
+            time.sleep(0.05)
+            _send_key("Return")
             return ""
-        # Try number word
         if digit in NUMBER_WORDS:
-            d = NUMBER_WORDS[digit]
-            if _active_window_id and _window_exists(_active_window_id):
-                _xdotool_type_to_window(_active_window_id, d)
-                time.sleep(0.05)
-                _xdotool_key_to_window(_active_window_id, "Return")
-            else:
-                _xdotool_type_and_enter(d)
+            _send_type(NUMBER_WORDS[digit])
+            time.sleep(0.05)
+            _send_key("Return")
             return ""
 
     # STT correction pass

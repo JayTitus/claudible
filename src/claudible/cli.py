@@ -93,13 +93,16 @@ def start() -> None:
     write_pid()
     cfg = Config.load()
 
-    # Ensure nerd-dictation callback is current
-    try:
-        from claudible.stt.callback import generate_callback
+    # Ensure nerd-dictation callback is current (Linux only — macOS uses direct VOSK)
+    from claudible.platform import detect_platform
 
-        generate_callback(cfg)
-    except Exception:
-        pass
+    if detect_platform() == "linux":
+        try:
+            from claudible.stt.callback import generate_callback
+
+            generate_callback(cfg)
+        except Exception:
+            pass
 
     # Check if server is already running (e.g. started externally)
     from claudible.tts.client import TTSClient
@@ -176,30 +179,23 @@ def stop() -> None:
 @main.command()
 @click.pass_context
 def restart(ctx: click.Context) -> None:
-    """Restart claudible. Uses systemd if available, otherwise background process."""
-    import shutil
+    """Restart claudible. Uses systemd/launchd if available, otherwise background process."""
     import subprocess
     import time
 
     from claudible.lifecycle import is_running
+    from claudible.platform import get_daemon_backend
 
     if is_running():
         ctx.invoke(stop)
         time.sleep(1)
 
-    # Prefer systemd if the service is available
-    if shutil.which("systemctl"):
-        try:
-            result = subprocess.run(
-                ["systemctl", "--user", "is-enabled", "claudible"],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                subprocess.run(["systemctl", "--user", "start", "claudible"], check=True)
-                click.echo("Claudible started via systemd.")
-                return
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
+    # Prefer OS service manager if available and enabled
+    daemon = get_daemon_backend()
+    if daemon and daemon.is_service_enabled():
+        if daemon.start_service():
+            click.echo("Claudible started via service manager.")
+            return
 
     # Fallback: launch in background
     subprocess.Popen(
@@ -215,10 +211,16 @@ def restart(ctx: click.Context) -> None:
 def ptt() -> None:
     """Start the push-to-talk listener."""
     from claudible.config import Config
-    from claudible.stt.keybind import run_ptt
+    from claudible.platform import get_keyboard_backend
+
+    kb = get_keyboard_backend()
+    if kb is None:
+        click.echo("Push-to-talk not available (missing platform deps).", err=True)
+        click.echo("Install with: pip install claudible[linux] or claudible[macos]", err=True)
+        sys.exit(1)
 
     cfg = Config.load()
-    run_ptt(cfg)
+    kb.run_ptt(cfg)
 
 
 @main.command()
@@ -432,9 +434,18 @@ def windows() -> None:
 @windows.command("list")
 def windows_list() -> None:
     """Show registered window slots with alive status."""
-    from claudible.stt.windows import read_window_state, validate_window
+    from claudible.platform import get_window_backend
 
-    state = read_window_state()
+    wb = get_window_backend()
+    if wb is None:
+        # Fallback to direct import for backwards compat
+        from claudible.stt.windows import read_window_state, validate_window
+        state = read_window_state()
+        _validate = validate_window
+    else:
+        state = wb.read_window_state()
+        _validate = wb.validate_window
+
     wins = state.get("windows", {})
     if not wins:
         click.echo("  No windows registered.")
@@ -444,7 +455,7 @@ def windows_list() -> None:
         title = entry.get("title", "")
         pid = entry.get("pid")
         process = entry.get("process")
-        alive = validate_window(wid) if wid else False
+        alive = _validate(wid) if wid else False
         status = click.style("alive", fg="green") if alive else click.style("gone", fg="red")
         if process:
             source = f"{process} (PID {pid})"
@@ -457,10 +468,15 @@ def windows_list() -> None:
 @click.argument("slot", default="1")
 def windows_register(slot: str) -> None:
     """Register the focused window to a slot (default: 1)."""
-    from claudible.stt.windows import register_window
+    from claudible.platform import get_window_backend
+
+    wb = get_window_backend()
+    if wb is None:
+        click.echo("Window management not available on this platform.", err=True)
+        sys.exit(1)
 
     try:
-        state = register_window(slot)
+        state = wb.register_window(slot)
         entry = state.get("windows", {}).get(slot, {})
         click.echo(f"Registered slot {slot}: {entry.get('window_id')} ({entry.get('title', '')})")
     except RuntimeError as e:
@@ -471,9 +487,14 @@ def windows_register(slot: str) -> None:
 @windows.command("clear")
 def windows_clear() -> None:
     """Clear all window registrations."""
-    from claudible.stt.windows import clear_all_windows
+    from claudible.platform import get_window_backend
 
-    clear_all_windows()
+    wb = get_window_backend()
+    if wb is not None:
+        wb.clear_all_windows()
+    else:
+        from claudible.stt.windows import clear_all_windows
+        clear_all_windows()
     click.echo("All window registrations cleared.")
 
 
@@ -683,6 +704,108 @@ def install(yes: bool, skip_gpu: bool) -> None:
     from claudible.setup.wizard import run_wizard
 
     run_wizard(auto_yes=yes, skip_gpu=skip_gpu)
+
+
+@main.command()
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts")
+@click.option("--keep-voices", is_flag=True, help="Keep voice samples")
+def uninstall(yes: bool, keep_voices: bool) -> None:
+    """Remove claudible config, data, hooks, and services.
+
+    Does NOT remove the package itself — run `uv tool uninstall claudible` after.
+    """
+    import shutil
+
+    from claudible.hooks.installer import is_installed, uninstall_hook
+    from claudible.lifecycle import is_running, stop_running
+    from claudible.paths import CACHE_DIR, CONFIG_DIR, DATA_DIR, VOICES_DIR
+    from claudible.platform import get_daemon_backend
+
+    if not yes:
+        click.echo("This will remove:")
+        click.echo(f"  Config:   {CONFIG_DIR}")
+        if not keep_voices:
+            click.echo(f"  Data:     {DATA_DIR}")
+        else:
+            click.echo(f"  Data:     {DATA_DIR} (keeping voices)")
+        click.echo(f"  Cache:    {CACHE_DIR}")
+        if is_installed():
+            click.echo("  Claude Code hook")
+        click.echo()
+        if not click.confirm("Proceed?", default=False):
+            click.echo("Aborted.")
+            return
+
+    # Stop running process
+    if is_running():
+        click.echo("Stopping claudible...")
+        stop_running()
+
+    # Remove systemd/launchd service
+    daemon = get_daemon_backend()
+    if daemon and daemon.is_service_enabled():
+        click.echo("Removing background service...")
+        daemon.stop_service()
+        # Disable and remove systemd unit file (Linux)
+        unit_file = Path.home() / ".config" / "systemd" / "user" / "claudible.service"
+        if unit_file.exists():
+            import subprocess
+
+            subprocess.run(
+                ["systemctl", "--user", "disable", "claudible"],
+                capture_output=True,
+            )
+            unit_file.unlink(missing_ok=True)
+            subprocess.run(
+                ["systemctl", "--user", "daemon-reload"],
+                capture_output=True,
+            )
+
+    # Remove Claude Code hook
+    if is_installed():
+        click.echo("Removing Claude Code hook...")
+        uninstall_hook()
+
+    # Remove cache
+    if CACHE_DIR.exists():
+        click.echo(f"Removing {CACHE_DIR}")
+        shutil.rmtree(CACHE_DIR)
+
+    # Remove data (optionally keep voices)
+    if DATA_DIR.exists():
+        if keep_voices:
+            # Remove everything in DATA_DIR except voices
+            for child in DATA_DIR.iterdir():
+                if child != VOICES_DIR:
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+            click.echo(f"Removed {DATA_DIR} (kept voices)")
+        else:
+            shutil.rmtree(DATA_DIR)
+            click.echo(f"Removed {DATA_DIR}")
+
+    # Remove config
+    if CONFIG_DIR.exists():
+        shutil.rmtree(CONFIG_DIR)
+        click.echo(f"Removed {CONFIG_DIR}")
+
+    click.echo()
+    click.echo("Claudible data removed.")
+
+    # Detect install method and show appropriate removal instructions
+    import importlib.metadata
+
+    try:
+        dist = importlib.metadata.distribution("claudible")
+        direct_url = dist.read_text("direct_url.json")
+        if direct_url and '"editable"' in direct_url:
+            click.echo("Installed as editable dev package — no further removal needed.")
+        else:
+            click.echo("To remove the package: uv tool uninstall claudible")
+    except importlib.metadata.PackageNotFoundError:
+        pass
 
 
 @main.command("config")

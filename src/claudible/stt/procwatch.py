@@ -1,10 +1,11 @@
-"""Process-based window lock — watches /proc for target CLI tools."""
+"""Process-based window lock — watches /proc for target CLI tools (Linux only)."""
 
 from __future__ import annotations
 
 import logging
 import os
 import subprocess
+import sys
 import threading
 from collections.abc import Callable
 
@@ -13,7 +14,7 @@ from claudible.stt.windows import read_window_state, write_window_state
 
 log = logging.getLogger(__name__)
 
-_MY_UID = os.getuid()
+_MY_UID = os.getuid() if sys.platform != "win32" else 0
 
 
 def scan_proc_for_names(names: list[str]) -> list[dict]:
@@ -126,38 +127,99 @@ def _read_comm(pid: int) -> str:
         return ""
 
 
-def find_terminal_window(pid: int) -> int | None:
-    """Walk the parent chain of *pid* via /proc looking for a terminal emulator window.
+def _get_process_tty(pid: int) -> str | None:
+    """Get the controlling TTY device for a PID (e.g. '/dev/pts/2')."""
+    try:
+        fd0 = os.readlink(f"/proc/{pid}/fd/0")
+        if fd0.startswith("/dev/pts/"):
+            return fd0
+    except OSError:
+        pass
+    return None
 
-    Only matches windows owned by known terminal emulators (Konsole, Alacritty,
-    etc.).  IDE integrated terminals (VS Code, JetBrains) are skipped because
-    xdotool cannot target their internal terminal widgets — input goes to
-    whatever element has focus in the IDE, not the terminal pane.
 
-    Returns the first real (>= 300x300) X11 window ID found under a terminal
-    emulator process, or None on Wayland/failure/IDE-only.
+def _resolve_konsole_session(target_pid: int, konsole_pid: int) -> dict | None:
+    """Find the Konsole D-Bus session that owns *target_pid*.
+
+    Matches by comparing PTY devices: the target process's /dev/pts/N
+    must match the PTY of one of Konsole's session shell PIDs.
+
+    Returns dict with konsole_service, konsole_session, or None.
+    """
+    target_tty = _get_process_tty(target_pid)
+    if not target_tty:
+        return None
+
+    service = f"org.kde.konsole-{konsole_pid}"
+
+    # Enumerate sessions by introspecting /Sessions
+    try:
+        xml = subprocess.check_output(
+            ["qdbus", service, "/Sessions",
+             "org.freedesktop.DBus.Introspectable.Introspect"],
+            stderr=subprocess.DEVNULL, timeout=3,
+        ).decode()
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+    import re
+    session_ids = re.findall(r'<node name="(\d+)"', xml)
+
+    for sid in session_ids:
+        try:
+            shell_pid_str = subprocess.check_output(
+                ["qdbus", service, f"/Sessions/{sid}",
+                 "org.kde.konsole.Session.processId"],
+                stderr=subprocess.DEVNULL, timeout=2,
+            ).decode().strip()
+            shell_pid = int(shell_pid_str)
+        except (FileNotFoundError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, ValueError):
+            continue
+
+        shell_tty = _get_process_tty(shell_pid)
+        if shell_tty == target_tty:
+            return {
+                "konsole_service": service,
+                "konsole_session": f"/Sessions/{sid}",
+            }
+
+    return None
+
+
+def find_terminal_info(pid: int) -> dict | None:
+    """Walk the parent chain of *pid* looking for a terminal emulator.
+
+    Returns a dict with terminal details for the nerd-dictation callback:
+      - terminal: terminal emulator name (e.g. "konsole", "alacritty")
+      - terminal_pid: PID of the terminal emulator process
+      - window_id: X11 window ID (may be None on Wayland)
+      - konsole_service: Konsole D-Bus service name (Konsole only)
+      - konsole_session: Konsole D-Bus session path (Konsole only)
+
+    IDE terminals (VS Code, JetBrains) are skipped.
+    Returns None if no supported terminal is found.
     """
     visited: set[int] = set()
     current = pid
     while current > 1 and current not in visited:
         visited.add(current)
-
-        # Read the process name at this level
         comm = _read_comm(current)
 
-        # Only look for windows if this process is a terminal emulator
         if comm in _TERMINAL_EMULATORS:
+            result: dict = {
+                "terminal": comm,
+                "terminal_pid": current,
+                "window_id": None,
+            }
+
+            # Try to get X11 window ID
             try:
                 out = subprocess.check_output(
                     ["xdotool", "search", "--pid", str(current)],
-                    stderr=subprocess.DEVNULL,
-                    timeout=3,
+                    stderr=subprocess.DEVNULL, timeout=3,
                 ).decode().strip()
                 if out:
-                    # Collect all real windows and pick the largest one
-                    # (terminal emulators like Konsole have multiple X11
-                    # windows — sub-panels, toolbars, etc. — the main
-                    # terminal is always the biggest)
                     best_wid = None
                     best_area = 0
                     for line in out.splitlines():
@@ -170,23 +232,37 @@ def find_terminal_window(pid: int) -> int | None:
                         if w >= _MIN_WINDOW_SIZE and h >= _MIN_WINDOW_SIZE and area > best_area:
                             best_wid = wid
                             best_area = area
-                    if best_wid is not None:
-                        return best_wid
-            except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+                    result["window_id"] = best_wid
+            except (FileNotFoundError, subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired, ValueError):
                 pass
 
-        # Walk to parent via /proc/<pid>/stat — field 4 is PPID
+            # For Konsole: resolve the exact D-Bus session
+            if comm == "konsole":
+                session_info = _resolve_konsole_session(pid, current)
+                if session_info:
+                    result.update(session_info)
+
+            return result
+
+        # Walk to parent
         try:
             with open(f"/proc/{current}/stat", "r") as f:
                 stat_line = f.read()
             close_paren = stat_line.rfind(")")
             fields_after_comm = stat_line[close_paren + 2:].split()
-            ppid = int(fields_after_comm[1])  # field index 1 after comm = PPID
+            ppid = int(fields_after_comm[1])
             current = ppid
         except (OSError, IndexError, ValueError):
             break
 
     return None
+
+
+def find_terminal_window(pid: int) -> int | None:
+    """Legacy wrapper — returns just the window ID for backwards compat."""
+    info = find_terminal_info(pid)
+    return info["window_id"] if info else None
 
 
 def get_window_title(window_id: int) -> str:
@@ -287,41 +363,61 @@ class ProcessWatcher:
             if pid in self._pid_to_slot:
                 continue  # already tracked
 
-            window_id = find_terminal_window(pid)
-            if window_id is None:
-                continue  # Wayland or no window found
+            term_info = find_terminal_info(pid)
+            if term_info is None:
+                continue  # No supported terminal found
+
+            window_id = term_info.get("window_id")
 
             # Check if this window_id already has a slot (same terminal, new process)
-            existing_slot = wid_to_slot.get(window_id)
-            if existing_slot is not None:
-                # Update PID tracking on existing slot
-                old_pid = windows[existing_slot].get("pid")
-                windows[existing_slot]["pid"] = pid
-                windows[existing_slot]["process"] = proc["name"]
-                self._pid_to_slot.pop(old_pid, None) if old_pid else None
-                self._pid_to_slot[pid] = existing_slot
-                changed = True
-                log.info(
-                    "Process watcher: updated slot %s — %s (PID %d) in existing window %d",
-                    existing_slot, proc["name"], pid, window_id,
-                )
-                continue
+            if window_id is not None:
+                existing_slot = wid_to_slot.get(window_id)
+                if existing_slot is not None:
+                    old_pid = windows[existing_slot].get("pid")
+                    windows[existing_slot]["pid"] = pid
+                    windows[existing_slot]["process"] = proc["name"]
+                    # Update terminal session info (session may have changed)
+                    if "konsole_service" in term_info:
+                        windows[existing_slot]["konsole_service"] = term_info["konsole_service"]
+                        windows[existing_slot]["konsole_session"] = term_info["konsole_session"]
+                    windows[existing_slot]["terminal"] = term_info.get("terminal", "")
+                    self._pid_to_slot.pop(old_pid, None) if old_pid else None
+                    self._pid_to_slot[pid] = existing_slot
+                    changed = True
+                    session = term_info.get("konsole_session", "")
+                    log.info(
+                        "Process watcher: updated slot %s — %s (PID %d) in %s%s",
+                        existing_slot, proc["name"], pid,
+                        term_info["terminal"],
+                        f" {session}" if session else "",
+                    )
+                    continue
 
             # Assign lowest free slot
             slot = self._lowest_free_slot(windows)
-            title = get_window_title(window_id)
-            windows[slot] = {
+            title = get_window_title(window_id) if window_id else "(no window)"
+            entry = {
                 "window_id": window_id,
                 "title": title,
                 "pid": pid,
                 "process": proc["name"],
+                "terminal": term_info.get("terminal", ""),
             }
-            wid_to_slot[window_id] = slot
+            if "konsole_service" in term_info:
+                entry["konsole_service"] = term_info["konsole_service"]
+                entry["konsole_session"] = term_info["konsole_session"]
+            windows[slot] = entry
+            if window_id is not None:
+                wid_to_slot[window_id] = slot
             self._pid_to_slot[pid] = slot
             changed = True
+            session = term_info.get("konsole_session", "")
             log.info(
-                "Process watcher: assigned slot %s — %s (PID %d) → window %d (%s)",
-                slot, proc["name"], pid, window_id, title,
+                "Process watcher: assigned slot %s — %s (PID %d) → %s%s (%s)",
+                slot, proc["name"], pid,
+                term_info["terminal"],
+                f" {session}" if session else "",
+                title,
             )
 
         if changed:
