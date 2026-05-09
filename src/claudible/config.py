@@ -58,6 +58,12 @@ class STTConfig(BaseModel):
     window_lock_enabled: bool = True
     watched_processes: list[str] = Field(default_factory=lambda: ["claude", "codex", "gemini"])
     process_watch_interval: float = 2.0
+    # Silero VAD pre-filter (rejects non-speech audio before VOSK)
+    vad_enabled: bool = False
+    vad_threshold: float = 0.5  # 0..1, higher = stricter (more rejected)
+    vad_min_speech_ms: int = 200  # require this much continuous speech to start
+    vad_min_silence_ms: int = 300  # silence needed to end an utterance
+    vad_speech_pad_ms: int = 100  # audio kept before speech start, in ms
 
 
 class DictationConfig(BaseModel):

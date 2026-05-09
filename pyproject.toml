@@ -38,6 +38,7 @@ dependencies = [
     "numpy>=1.26",
     # STT
     "vosk>=0.3",
+    "onnxruntime>=1.17",  # Silero VAD pre-filter
     # System tray
     "pystray>=0.19",
     "Pillow>=10.0",
@@ -71,7 +72,10 @@ claudible = "claudible.cli:main"
 packages = ["src/claudible"]
 
 [tool.hatch.build]
-artifacts = ["src/claudible/data/voices/**/*.wav"]
+artifacts = [
+    "src/claudible/data/voices/**/*.wav",
+    "src/claudible/stt/models/*.onnx",
+]
 
 [tool.ruff]
 target-version = "py310"

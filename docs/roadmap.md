@@ -66,9 +66,8 @@ Claudible is a fully local voice interface for Claude Code and other CLI AI tool
 - Per-tool hook installer: `claudible hooks install gemini`, `claudible hooks install codex`, `claudible hooks install --all`
 
 ### Silero VAD Integration
-- Neural voice activity detection (Silero VAD) as a pre-filter before VOSK
-- Reject non-speech audio frames before they reach the speech recognizer
-- Reduce false recognitions from keyboard taps, ambient noise, and background audio
+- ~~Neural voice activity detection (Silero VAD) as a pre-filter before VOSK~~ — **landed for the macOS direct-VOSK path.** Bundled ONNX model + onnxruntime, configurable threshold/grace/pad, and `claudible vad test FILE.wav` for offline tuning.
+- Linux integration still pending — requires moving off the nerd-dictation subprocess to a direct sounddevice→VOSK path, since nerd-dictation owns the audio stream.
 
 ### VOSK Confidence Filtering
 - Expose VOSK per-word confidence scores

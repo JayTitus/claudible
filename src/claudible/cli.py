@@ -663,6 +663,105 @@ def accuracy_clear() -> None:
 
 
 @main.group()
+def vad() -> None:
+    """Silero VAD voice activity detection."""
+
+
+@vad.command("test")
+@click.argument("wav_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--threshold", type=float, default=None, help="Override config threshold (0..1)")
+@click.option("--min-speech-ms", type=int, default=None)
+@click.option("--min-silence-ms", type=int, default=None)
+@click.option("--save-segments", type=click.Path(file_okay=False), default=None,
+              help="Write each detected speech segment to this directory as WAV.")
+def vad_test(wav_file: str, threshold: float | None,
+             min_speech_ms: int | None, min_silence_ms: int | None,
+             save_segments: str | None) -> None:
+    """Run VAD on a WAV file and print detected speech segments.
+
+    Useful for tuning the threshold without a microphone — feed in an
+    audio file and inspect what gets classified as speech vs noise.
+    """
+    import soundfile as sf
+    from claudible.config import Config
+    from claudible.stt.vad import SpeechGate
+
+    cfg = Config.load()
+    audio, sr = sf.read(wav_file, dtype="float32", always_2d=False)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sr != 16000:
+        click.echo(f"Resampling {sr} → 16000 Hz...")
+        import numpy as np
+
+        ratio = 16000 / sr
+        new_len = int(len(audio) * ratio)
+        audio = np.interp(
+            np.linspace(0, len(audio) - 1, new_len),
+            np.arange(len(audio)),
+            audio,
+        ).astype("float32")
+        sr = 16000
+
+    gate = SpeechGate(
+        sample_rate=sr,
+        threshold=threshold if threshold is not None else cfg.stt.vad_threshold,
+        min_speech_ms=min_speech_ms if min_speech_ms is not None else cfg.stt.vad_min_speech_ms,
+        min_silence_ms=min_silence_ms if min_silence_ms is not None else cfg.stt.vad_min_silence_ms,
+        speech_pad_ms=cfg.stt.vad_speech_pad_ms,
+    )
+
+    events = gate.feed(audio)
+    window_ms = gate._vad.window_samples * 1000 / sr  # type: ignore[attr-defined]
+
+    segments: list[tuple[float, float, list]] = []
+    cur_start: float | None = None
+    cur_audio: list = []
+    probs: list[float] = []
+
+    for i, evt in enumerate(events):
+        t_ms = i * window_ms
+        probs.append(evt.probability)
+        if evt.event == "speech_start":
+            cur_start = t_ms
+            cur_audio = [w for w in evt.pad] + [evt.audio]
+        elif evt.event == "speech_end" and cur_start is not None:
+            cur_audio.append(evt.audio)
+            segments.append((cur_start, t_ms, cur_audio))
+            cur_start = None
+            cur_audio = []
+        elif evt.is_speech and evt.audio is not None:
+            cur_audio.append(evt.audio)
+
+    if cur_start is not None:
+        segments.append((cur_start, len(events) * window_ms, cur_audio))
+
+    duration_ms = len(events) * window_ms
+    speech_ms = sum(e - s for s, e, _ in segments)
+    avg_prob = sum(probs) / len(probs) if probs else 0
+    click.echo(f"  File:           {wav_file}")
+    click.echo(f"  Duration:       {duration_ms / 1000:.2f}s ({len(events)} windows)")
+    click.echo(f"  Speech total:   {speech_ms / 1000:.2f}s ({speech_ms / duration_ms * 100:.1f}%)" if duration_ms else "  Speech total:   0s")
+    click.echo(f"  Mean p(speech): {avg_prob:.3f}")
+    click.echo(f"  Threshold:      {gate.threshold:.2f}")
+    click.echo(f"  Segments:       {len(segments)}")
+    for i, (s, e, _) in enumerate(segments):
+        click.echo(f"    [{i + 1}] {s / 1000:6.2f}s → {e / 1000:6.2f}s  ({(e - s) / 1000:.2f}s)")
+
+    if save_segments and segments:
+        import numpy as np
+        from pathlib import Path
+
+        out_dir = Path(save_segments)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for i, (_, _, audio_chunks) in enumerate(segments):
+            seg_audio = np.concatenate(audio_chunks)
+            out_path = out_dir / f"segment_{i + 1:03d}.wav"
+            sf.write(str(out_path), seg_audio, sr, subtype="PCM_16")
+        click.echo(f"  Wrote {len(segments)} segment(s) to {out_dir}")
+
+
+@main.group()
 def hooks() -> None:
     """Manage Claude Code hooks."""
 

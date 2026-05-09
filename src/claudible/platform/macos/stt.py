@@ -83,7 +83,12 @@ class MacOSDictation:
         samplerate = 16000
         rec = vosk.KaldiRecognizer(model, samplerate)
 
-        log.info("VOSK dictation started (model=%s)", self._model_name)
+        gate = self._build_gate()
+        if gate is not None:
+            log.info("VOSK dictation started with Silero VAD pre-filter "
+                     "(threshold=%.2f)", gate.threshold)
+        else:
+            log.info("VOSK dictation started (model=%s)", self._model_name)
 
         try:
             with sd.RawInputStream(
@@ -92,16 +97,61 @@ class MacOSDictation:
             ) as stream:
                 while not self._stop_event.is_set():
                     data = stream.read(4000)[0]
-                    if rec.AcceptWaveform(bytes(data)):
-                        result = json.loads(rec.Result())
-                        text = result.get("text", "").strip()
-                        if text:
-                            self._on_text(text)
+                    self._process_chunk(bytes(data), rec, gate)
         except Exception:
             log.exception("VOSK dictation error")
         finally:
             self._running = False
             log.info("VOSK dictation stopped")
+
+    def _build_gate(self):
+        """Build a SpeechGate if VAD is enabled, else None."""
+        if not getattr(self._config.stt, "vad_enabled", False):
+            return None
+        try:
+            from claudible.stt.vad import SpeechGate
+
+            return SpeechGate(
+                sample_rate=16000,
+                threshold=self._config.stt.vad_threshold,
+                min_speech_ms=self._config.stt.vad_min_speech_ms,
+                min_silence_ms=self._config.stt.vad_min_silence_ms,
+                speech_pad_ms=self._config.stt.vad_speech_pad_ms,
+            )
+        except (ImportError, FileNotFoundError) as e:
+            log.warning("Silero VAD unavailable, falling back to raw VOSK: %s", e)
+            return None
+
+    def _process_chunk(self, pcm: bytes, rec, gate) -> None:
+        """Feed one audio chunk through the VAD gate (if any) into VOSK."""
+        if gate is None:
+            if rec.AcceptWaveform(pcm):
+                self._emit_result(rec)
+            return
+
+        import numpy as np
+
+        for evt in gate.feed(pcm):
+            # Pad audio (pre-roll) on speech_start so VOSK gets utterance onset
+            for pad_window in evt.pad:
+                pad_pcm = (pad_window * 32768.0).astype(np.int16).tobytes()
+                rec.AcceptWaveform(pad_pcm)
+
+            if evt.is_speech and evt.audio is not None:
+                window_pcm = (evt.audio * 32768.0).astype(np.int16).tobytes()
+                if rec.AcceptWaveform(window_pcm):
+                    self._emit_result(rec)
+            elif evt.event == "speech_end":
+                # Force VOSK to flush its buffered partial as a final result
+                self._emit_result(rec, final=True)
+
+    def _emit_result(self, rec, final: bool = False) -> None:
+        """Read the current result from VOSK and dispatch text if any."""
+        result_json = rec.FinalResult() if final else rec.Result()
+        result = json.loads(result_json)
+        text = result.get("text", "").strip()
+        if text:
+            self._on_text(text)
 
     def _on_text(self, text: str) -> None:
         """Handle recognized text — type into frontmost application."""
