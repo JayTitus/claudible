@@ -42,7 +42,32 @@ class TTSConfig(BaseModel):
     audio_lead_in_ms: int = 150  # silence prepended to audio (helps Bluetooth sinks)
 
 
+class WhisperConfig(BaseModel):
+    """faster-whisper streaming STT backend."""
+
+    model: str = "distil-large-v3"  # also: large-v3-turbo, large-v3, base.en, tiny.en
+    device: str = "auto"  # auto / cuda / cpu
+    compute_type: str = "auto"  # auto picks float16 for cuda, int8 for cpu
+    beam_size: int = 5
+    language: str = "en"
+    input_device: str = ""  # empty = system default; "effect_output.rnnoise" for RNNoise mic
+    # Transcription guards (mitigate Whisper hallucinations)
+    condition_on_previous_text: bool = False  # avoid context-leaking hallucinations
+    no_speech_threshold: float = 0.6  # higher = less prone to "thanks for watching"
+    log_prob_threshold: float = -1.0  # reject low-confidence segments
+    # Hallucination phrase blocklist (case-insensitive substring match)
+    blocked_phrases: list[str] = Field(default_factory=lambda: [
+        "thanks for watching",
+        "thank you for watching",
+        "subtitles by",
+        "subscribe to",
+        "amara.org",
+        "subtitling",
+    ])
+
+
 class STTConfig(BaseModel):
+    engine: str = "nerd-dictation"  # nerd-dictation / whisper
     nerd_dictation_path: str = "nerd-dictation"
     vosk_model: str = "small"
     push_to_talk_key: str = "KEY_RIGHTCTRL"
@@ -120,6 +145,7 @@ class HookConfig(BaseModel):
 class Config(BaseModel):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
+    whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     dictation: DictationConfig = Field(default_factory=DictationConfig)
     rephrase: RephraseConfig = Field(default_factory=RephraseConfig)
     correction: CorrectionConfig = Field(default_factory=CorrectionConfig)
