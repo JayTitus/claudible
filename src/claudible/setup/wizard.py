@@ -233,6 +233,54 @@ def _step_install_voices() -> None:
         click.echo(f"  Set default voices for {len(defaults)} personas.")
 
 
+def _step_configure_stt_engine(auto_yes: bool) -> str:
+    """Step 4b: Pick the STT recognition engine.
+
+    Defaults to whisper when CUDA is detected; nerd-dictation otherwise.
+    """
+    _header("Step 4b: Speech Recognition Engine")
+
+    has_cuda = False
+    try:
+        import ctranslate2
+
+        has_cuda = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        pass
+
+    click.echo("  Two recognition engines are available:")
+    click.echo()
+    click.echo("    1) whisper        — faster-whisper + Silero VAD (recommended)")
+    click.echo("                        Uses your GPU. Far better accuracy and noise rejection.")
+    click.echo("                        Downloads ~1.5 GB Whisper model on first run.")
+    click.echo()
+    click.echo("    2) nerd-dictation — VOSK-based subprocess (legacy)")
+    click.echo("                        CPU-friendly. Lower accuracy. False triggers on")
+    click.echo("                        vibrations / keyboard taps unless RNNoise is installed.")
+    click.echo()
+
+    default_engine = "whisper" if has_cuda else "nerd-dictation"
+    if has_cuda:
+        click.echo(click.style("  CUDA detected — Whisper recommended.", fg="green"))
+    else:
+        click.echo(click.style(
+            "  No CUDA detected — nerd-dictation default. "
+            "Whisper still works on CPU with model='tiny.en' or 'base.en'.",
+            fg="yellow",
+        ))
+
+    if auto_yes:
+        return default_engine
+
+    choice = click.prompt(
+        "  Engine [whisper/nerd-dictation]", default=default_engine, show_default=True,
+    ).strip().lower()
+    if choice not in ("whisper", "nerd-dictation"):
+        click.echo(f"  Unknown choice {choice!r} — using default.")
+        return default_engine
+    return choice
+
+
 def _step_install_rnnoise(auto_yes: bool) -> None:
     """Step 7: Build and install RNNoise LADSPA plugin (Linux only)."""
     from claudible.platform import detect_platform, MACOS
@@ -446,6 +494,9 @@ def run_wizard(auto_yes: bool = False, skip_gpu: bool = False) -> None:
     # Step 4: Toggle key
     toggle_key = _step_configure_toggle(auto_yes)
 
+    # Step 4b: STT engine choice
+    engine = _step_configure_stt_engine(auto_yes)
+
     # Save config
     from claudible.config import Config
 
@@ -454,6 +505,7 @@ def run_wizard(auto_yes: bool = False, skip_gpu: bool = False) -> None:
         cfg.tts.voice = voice_name
     cfg.stt.push_to_talk_key = ptt_key
     cfg.stt.toggle_key = toggle_key
+    cfg.stt.engine = engine
     cfg.save()
     click.echo(click.style("\n  Config saved.", fg="green"))
 

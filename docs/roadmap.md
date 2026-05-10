@@ -11,7 +11,11 @@ Claudible is a fully local voice interface for Claude Code and other CLI AI tool
 - Configurable speech speed, language, and audio lead-in (for Bluetooth sink wake-up)
 
 ### Speech-to-Text
-- nerd-dictation wrapping VOSK for offline speech recognition
+- **Two engines** (selectable via `stt.engine`):
+  - **Whisper** (default) — faster-whisper streaming with Silero VAD gating. distil-large-v3 by default; large-v3-turbo, large-v3, base.en, tiny.en supported. ~30× realtime on consumer GPU.
+  - **nerd-dictation** (legacy) — VOSK-based subprocess. Lighter, but lower accuracy and prone to vibration / keyboard-tap false triggers.
+- Silero VAD pre-filter rejects non-speech (vibrations, keyboard taps, ambient noise) before it reaches the recognizer
+- Whisper hallucination filter drops known YouTube-corpus phrases on near-silent inputs ("thanks for watching", "subtitles by", etc.)
 - Push-to-talk (hold Right Ctrl) and always-listening (toggle Scroll Lock) modes
 - Wake word detection with configurable trigger words per persona (e.g., say "Jarvis" to activate)
 - Idle timeout auto-deactivation (default 15 seconds)
@@ -65,9 +69,16 @@ Claudible is a fully local voice interface for Claude Code and other CLI AI tool
 - Generic webhook endpoint (POST /api/hook/output) for arbitrary tools
 - Per-tool hook installer: `claudible hooks install gemini`, `claudible hooks install codex`, `claudible hooks install --all`
 
-### Silero VAD Integration
-- ~~Neural voice activity detection (Silero VAD) as a pre-filter before VOSK~~ — **landed for the macOS direct-VOSK path.** Bundled ONNX model + onnxruntime, configurable threshold/grace/pad, and `claudible vad test FILE.wav` for offline tuning.
-- Linux integration still pending — requires moving off the nerd-dictation subprocess to a direct sounddevice→VOSK path, since nerd-dictation owns the audio stream.
+### Silero VAD Integration ✓ shipped
+- Bundled ONNX model + onnxruntime, configurable threshold/grace/pad.
+- `claudible vad test FILE.wav` for offline tuning without a microphone.
+- Wired into the new Whisper streaming engine as the speech gate.
+
+### Whisper STT engine ✓ shipped
+- faster-whisper streaming with Silero VAD gating, replaces VOSK as the recommended backend.
+- Hallucination filter for the YouTube-corpus phrases Whisper is known to emit on near-silence.
+- Configurable model selection (distil-large-v3 default, also turbo / large / base / tiny).
+- nerd-dictation kept as opt-in fallback via `stt.engine = "nerd-dictation"`.
 
 ### VOSK Confidence Filtering
 - Expose VOSK per-word confidence scores

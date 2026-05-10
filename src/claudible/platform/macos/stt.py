@@ -1,7 +1,11 @@
-"""macOS STT backend — direct VOSK via sounddevice.
+"""macOS STT backend.
 
-Replaces nerd-dictation with an in-process VOSK recognizer, since
-nerd-dictation depends on Linux-specific tools (xdotool, evdev).
+Same architecture as Linux: dispatches based on ``stt.engine``. The
+"whisper" engine is the recommended path; the legacy "vosk" option
+remains for parity but Whisper is significantly more accurate.
+nerd-dictation is not supported on macOS (it depends on evdev / X11),
+so a config of ``stt.engine = "nerd-dictation"`` falls through to
+the direct-VOSK implementation here.
 """
 
 from __future__ import annotations
@@ -18,15 +22,39 @@ from claudible.platform.base import STTBackend
 log = logging.getLogger(__name__)
 
 
-class DirectVoskSTT(STTBackend):
-    """Direct VOSK speech recognition using sounddevice."""
+class MacOSSTT(STTBackend):
+    """Dispatching backend — picks engine based on config.stt.engine."""
 
     def create_dictation(self, config: Any) -> Any:
-        return MacOSDictation(config)
+        engine = getattr(config.stt, "engine", "whisper")
+        # nerd-dictation isn't a real option on macOS; treat it as a
+        # request for the legacy direct-VOSK path.
+        if engine in ("whisper",):
+            return _create_whisper(config)
+        if engine in ("vosk", "nerd-dictation", "direct"):
+            return MacOSDictation(config)
+        log.warning("Unknown stt.engine=%r — falling back to whisper", engine)
+        return _create_whisper(config)
+
+
+# Backwards-compatible name retained so existing imports keep working.
+DirectVoskSTT = MacOSSTT
+
+
+def _create_whisper(config: Any) -> Any:
+    from claudible.platform.macos.inject import OsaScriptInjector
+    from claudible.stt.router import Router
+    from claudible.stt.whisper_engine import WhisperEngine
+
+    injector = OsaScriptInjector()
+    router = Router(config, injector)
+    return WhisperEngine(config, router)
 
 
 class MacOSDictation:
-    """VOSK-based dictation for macOS — compatible with Dictation API."""
+    """Legacy direct-VOSK dictation for macOS — kept for parity with
+    the previous backend. New work should use the Whisper engine.
+    """
 
     def __init__(self, config: Any) -> None:
         self._config = config
@@ -54,7 +82,6 @@ class MacOSDictation:
             return
         if not self.is_available:
             raise RuntimeError("VOSK or sounddevice not installed")
-
         self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True, name="vosk-stt")
@@ -73,6 +100,9 @@ class MacOSDictation:
         import sounddevice as sd
         import vosk
 
+        from claudible.platform.macos.inject import OsaScriptInjector
+        from claudible.stt.router import Router
+
         model_path = self._resolve_model()
         if not model_path:
             log.error("VOSK model not found: %s", self._model_name)
@@ -82,6 +112,8 @@ class MacOSDictation:
         model = vosk.Model(model_path)
         samplerate = 16000
         rec = vosk.KaldiRecognizer(model, samplerate)
+
+        router = Router(self._config, OsaScriptInjector())
 
         gate = self._build_gate()
         if gate is not None:
@@ -97,7 +129,7 @@ class MacOSDictation:
             ) as stream:
                 while not self._stop_event.is_set():
                     data = stream.read(4000)[0]
-                    self._process_chunk(bytes(data), rec, gate)
+                    self._process_chunk(bytes(data), rec, gate, router)
         except Exception:
             log.exception("VOSK dictation error")
         finally:
@@ -105,7 +137,6 @@ class MacOSDictation:
             log.info("VOSK dictation stopped")
 
     def _build_gate(self):
-        """Build a SpeechGate if VAD is enabled, else None."""
         if not getattr(self._config.stt, "vad_enabled", False):
             return None
         try:
@@ -119,20 +150,18 @@ class MacOSDictation:
                 speech_pad_ms=self._config.stt.vad_speech_pad_ms,
             )
         except (ImportError, FileNotFoundError) as e:
-            log.warning("Silero VAD unavailable, falling back to raw VOSK: %s", e)
+            log.warning("Silero VAD unavailable: %s", e)
             return None
 
-    def _process_chunk(self, pcm: bytes, rec, gate) -> None:
-        """Feed one audio chunk through the VAD gate (if any) into VOSK."""
+    def _process_chunk(self, pcm: bytes, rec, gate, router) -> None:
         if gate is None:
             if rec.AcceptWaveform(pcm):
-                self._emit_result(rec)
+                self._emit_result(rec, router)
             return
 
         import numpy as np
 
         for evt in gate.feed(pcm):
-            # Pad audio (pre-roll) on speech_start so VOSK gets utterance onset
             for pad_window in evt.pad:
                 pad_pcm = (pad_window * 32768.0).astype(np.int16).tobytes()
                 rec.AcceptWaveform(pad_pcm)
@@ -140,42 +169,19 @@ class MacOSDictation:
             if evt.is_speech and evt.audio is not None:
                 window_pcm = (evt.audio * 32768.0).astype(np.int16).tobytes()
                 if rec.AcceptWaveform(window_pcm):
-                    self._emit_result(rec)
+                    self._emit_result(rec, router)
             elif evt.event == "speech_end":
-                # Force VOSK to flush its buffered partial as a final result
-                self._emit_result(rec, final=True)
+                self._emit_result(rec, router, final=True)
 
-    def _emit_result(self, rec, final: bool = False) -> None:
-        """Read the current result from VOSK and dispatch text if any."""
+    def _emit_result(self, rec, router, final: bool = False) -> None:
         result_json = rec.FinalResult() if final else rec.Result()
         result = json.loads(result_json)
         text = result.get("text", "").strip()
         if text:
-            self._on_text(text)
-
-    def _on_text(self, text: str) -> None:
-        """Handle recognized text — type into frontmost application."""
-        try:
-            from claudible.stt.processor import process_text
-
-            processed = process_text(text, self._config)
-            if processed:
-                self._type_text(processed)
-        except ImportError:
-            # Fallback: type directly
-            self._type_text(text)
-
-    def _type_text(self, text: str) -> None:
-        """Type text into the frontmost application using osascript."""
-        try:
-            # Escape for AppleScript
-            escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-            subprocess.run(
-                ["osascript", "-e", f'tell application "System Events" to keystroke "{escaped}"'],
-                capture_output=True, timeout=3,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            log.debug("Failed to type text via osascript")
+            try:
+                router.process(text)
+            except Exception:
+                log.exception("Router failed for text=%r", text)
 
     def _resolve_model(self) -> str | None:
         candidates = [

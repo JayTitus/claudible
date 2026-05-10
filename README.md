@@ -15,7 +15,9 @@ Everything runs locally. No cloud APIs, no data leaving your machine.
 ## Features
 
 - **Text-to-Speech** — Coqui XTTS v2 running locally on your GPU with voice cloning
-- **Speech-to-Text** — Push-to-talk and always-listening via nerd-dictation (VOSK), types directly into your terminal
+- **Speech-to-Text** — Push-to-talk and always-listening, types directly into your terminal. Two backends:
+  - **Whisper** (default for new installs) — faster-whisper streaming with Silero VAD pre-filter. Far better accuracy for technical vocabulary, names, and punctuation. Whisper-class noise rejection — vibrations and keyboard taps don't trigger false transcriptions.
+  - **nerd-dictation** (legacy) — VOSK-based, lighter on the GPU, no model download.
 - **Wake Word Detection** — Say a trigger word (e.g. "Jarvis") to activate, auto-sleeps after idle timeout
 - **Process-Based Window Lock** — Automatically detects CLI tools (Claude, Codex, Gemini) running in terminal windows and routes voice input to the correct one
 - **Auto STT Toggle** — Listening starts automatically when a watched process appears and stops when the last one exits
@@ -50,10 +52,26 @@ For input, hold Right Ctrl to talk (push-to-talk) or press Scroll Lock for alway
 
 ## Requirements
 
-- Linux (Ubuntu/Debian-based, X11)
-- NVIDIA GPU with 4+ GB VRAM
+- Linux (Ubuntu/Debian-based, X11) — primary target. Experimental macOS support; no Wayland yet.
+- NVIDIA GPU recommended:
+  - **TTS only** (XTTS v2): 4+ GB VRAM
+  - **TTS + Whisper STT** (default): 6+ GB VRAM (XTTS ≈ 3 GB, distil-large-v3 ≈ 1.5 GB, plus headroom)
+  - **CPU fallback** for STT works with `whisper.model = "tiny.en"` or `"base.en"` and `device = "cpu"` — slower but no GPU needed for the STT side. TTS still wants a GPU for real-time output.
+- ~3 GB free disk for the Whisper model on first run (cached in `~/.cache/huggingface/`)
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- [Ollama](https://ollama.ai) or any OpenAI-compatible API (optional, for rephrasing)
+- [Ollama](https://ollama.ai) or any OpenAI-compatible API (optional, for rephrasing and STT correction)
+
+### Choosing a Whisper model
+
+Set in `[whisper]` section of `~/.config/claudible/config.toml` or via the config UI.
+
+| Model | VRAM | Quality | Latency (RTX-class) | Notes |
+|---|---|---|---|---|
+| `distil-large-v3` *(default)* | ~1.5 GB | Excellent | ~30× realtime | Best quality/VRAM tradeoff |
+| `large-v3-turbo` | ~1.5 GB | Excellent | ~40× realtime | Fastest of the high-quality models |
+| `large-v3` | ~3 GB | Highest | ~10× realtime | Use if you have VRAM and want max accuracy |
+| `base.en` | ~150 MB | Good | CPU-runnable | English-only, decent on CPU |
+| `tiny.en` | ~75 MB | Fair | CPU-runnable | English-only, fast on CPU |
 
 ## Install
 

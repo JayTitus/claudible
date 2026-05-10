@@ -279,7 +279,41 @@
             <span>Hold mode (hold key to talk)</span>
           </label>
         </div>
+        <h3 style="margin-top:1.5rem;">Recognition Engine</h3>
         <div class="form-group">
+          <label for="stt-engine">Engine</label>
+          <select id="stt-engine">
+            <option value="nerd-dictation">nerd-dictation (VOSK) — legacy, lighter</option>
+            <option value="whisper">Whisper (faster-whisper) — recommended, GPU</option>
+          </select>
+          <span style="font-size:0.75rem; color:var(--text-muted);">
+            Whisper uses your GPU and produces dramatically more accurate transcriptions, with built-in Silero VAD for noise rejection.
+            nerd-dictation stays available as a CPU-friendly fallback.
+            Restart claudible after changing this.
+          </span>
+        </div>
+
+        <div id="stt-whisper-section" class="form-group" style="display:none;">
+          <h4 style="margin:1rem 0 0.5rem;">Whisper Settings</h4>
+          <label for="stt-whisper-model">Model</label>
+          <select id="stt-whisper-model">
+            <option value="distil-large-v3">distil-large-v3 (default, ~1.5 GB VRAM)</option>
+            <option value="large-v3-turbo">large-v3-turbo (fastest large-quality)</option>
+            <option value="large-v3">large-v3 (best accuracy, ~3 GB VRAM)</option>
+            <option value="base.en">base.en (CPU-friendly, English)</option>
+            <option value="tiny.en">tiny.en (smallest, English)</option>
+          </select>
+          <label for="stt-whisper-device" style="margin-top:0.5rem;">Device</label>
+          <select id="stt-whisper-device">
+            <option value="auto">auto</option>
+            <option value="cuda">cuda</option>
+            <option value="cpu">cpu</option>
+          </select>
+          <label for="stt-whisper-language" style="margin-top:0.5rem;">Language</label>
+          <input type="text" id="stt-whisper-language" placeholder="en" style="max-width:6rem;">
+        </div>
+
+        <div id="stt-vosk-section" class="form-group">
           <label for="stt-vosk-model">VOSK Model</label>
           <div class="input-row">
             <select id="stt-vosk-model"></select>

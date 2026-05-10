@@ -790,6 +790,18 @@ async function loadSTT() {
   });
   updateVoskInfo();
 
+  // Engine selector + Whisper settings
+  const engineSel = document.getElementById("stt-engine");
+  if (engineSel) {
+    engineSel.value = cfg.stt.engine || "nerd-dictation";
+    const wcfg = cfg.whisper || {};
+    document.getElementById("stt-whisper-model").value = wcfg.model || "distil-large-v3";
+    document.getElementById("stt-whisper-device").value = wcfg.device || "auto";
+    document.getElementById("stt-whisper-language").value = wcfg.language || "en";
+    updateEngineSections();
+    engineSel.addEventListener("change", updateEngineSections);
+  }
+
   // Trigger word for active persona
   const persona = cfg.rephrase.persona || "default";
   const tw = (cfg.rephrase.trigger_words || {})[persona] || "";
@@ -810,6 +822,12 @@ async function loadSTT() {
 }
 
 let _voskModels = [];
+
+function updateEngineSections() {
+  const engine = document.getElementById("stt-engine").value;
+  document.getElementById("stt-whisper-section").style.display = engine === "whisper" ? "" : "none";
+  document.getElementById("stt-vosk-section").style.display = engine === "nerd-dictation" ? "" : "none";
+}
 
 function updateVoskInfo() {
   const voskSel = document.getElementById("stt-vosk-model");
@@ -951,6 +969,7 @@ document.getElementById("stt-save").addEventListener("click", async () => {
 
     await Promise.all([
       api("PATCH", "/config/stt", {
+        engine: document.getElementById("stt-engine").value,
         push_to_talk_key: document.getElementById("stt-ptt-key").value,
         toggle_key: document.getElementById("stt-toggle-key").value,
         hold_mode: document.getElementById("stt-hold-mode").checked,
@@ -973,6 +992,11 @@ document.getElementById("stt-save").addEventListener("click", async () => {
         model: document.getElementById("stt-correction-model").value.trim() || "llama3.2:1b",
         timeout_ms: parseInt(document.getElementById("stt-correction-timeout").value) || 1500,
         log_enabled: document.getElementById("stt-correction-log").checked,
+      }),
+      api("PATCH", "/config/whisper", {
+        model: document.getElementById("stt-whisper-model").value,
+        device: document.getElementById("stt-whisper-device").value,
+        language: document.getElementById("stt-whisper-language").value.trim() || "en",
       }),
     ]);
     cfg = null;

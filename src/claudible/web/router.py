@@ -115,7 +115,7 @@ async def get_config():
 
 @router.patch("/config/{section}")
 async def patch_config(section: str, body: dict):
-    if section not in ("tts", "stt", "rephrase", "dictation", "correction", "container", "completion", "hook"):
+    if section not in ("tts", "stt", "whisper", "rephrase", "dictation", "correction", "container", "completion", "hook"):
         raise HTTPException(400, f"Unknown config section: {section}")
     cfg = Config.load()
     sub = getattr(cfg, section)
