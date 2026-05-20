@@ -967,7 +967,7 @@ document.getElementById("stt-save").addEventListener("click", async () => {
       trigger_mode: triggerMode,
     });
 
-    await Promise.all([
+    const patchResults = await Promise.all([
       api("PATCH", "/config/stt", {
         engine: document.getElementById("stt-engine").value,
         push_to_talk_key: document.getElementById("stt-ptt-key").value,
@@ -999,6 +999,7 @@ document.getElementById("stt-save").addEventListener("click", async () => {
         language: document.getElementById("stt-whisper-language").value.trim() || "en",
       }),
     ]);
+    const serverRestarted = patchResults.some(r => r && r.restarted);
     cfg = null;
 
     // Update RNNoise filter config if active
@@ -1020,10 +1021,16 @@ document.getElementById("stt-save").addEventListener("click", async () => {
       }
     } catch (e) { /* ignore */ }
 
-    // Restart STT key listener to pick up new settings
+    // Restart STT key listener to pick up new settings — unless the
+    // server already restarted because an engine-affecting setting
+    // changed (avoids a double Whisper model reload).
     try {
-      await api("POST", "/stt/restart");
-      toast("STT settings saved & listener restarted");
+      if (serverRestarted) {
+        toast("STT settings saved — engine reloading (Whisper model load ~20s)");
+      } else {
+        await api("POST", "/stt/restart");
+        toast("STT settings saved & listener restarted");
+      }
     } catch (e) {
       toast("STT settings saved (restart listener manually)", true);
     }

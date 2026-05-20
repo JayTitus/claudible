@@ -119,8 +119,12 @@ async def patch_config(section: str, body: dict):
         raise HTTPException(400, f"Unknown config section: {section}")
     cfg = Config.load()
     sub = getattr(cfg, section)
+    changed_keys: list[str] = []
     for key, value in body.items():
         if hasattr(sub, key):
+            old = getattr(sub, key)
+            if old != value:
+                changed_keys.append(key)
             setattr(sub, key, value)
     cfg.save()
 
@@ -133,7 +137,25 @@ async def patch_config(section: str, body: dict):
         except Exception:
             log.debug("Failed to regenerate callback", exc_info=True)
 
-    return {"ok": True}
+    # Live-restart the STT engine when an engine-affecting setting changed.
+    # This rebuilds the dictation backend with the new engine / model /
+    # device / language without requiring the user to restart claudible.
+    restarted = False
+    needs_restart = (
+        section == "whisper"
+        or (section == "stt" and any(k in changed_keys for k in (
+            "engine", "vad_enabled", "vad_threshold", "vad_min_speech_ms",
+            "vad_min_silence_ms", "vad_speech_pad_ms",
+        )))
+    )
+    if needs_restart and _stt_restart_callback:
+        try:
+            _stt_restart_callback()
+            restarted = True
+        except Exception:
+            log.exception("Live STT restart failed")
+
+    return {"ok": True, "restarted": restarted}
 
 
 # ── Status ──────────────────────────────────────────────────────────────────
