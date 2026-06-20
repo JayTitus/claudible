@@ -960,3 +960,67 @@ async def logs(lines: int = 200):
             pass
 
     return {"logs": "(logs not available on this platform)"}
+
+
+# ── Generic output webhook (v1) ─────────────────────────────────────────────
+
+class HookOutputRequest(BaseModel):
+    """Body for POST /api/v1/hook/output — runtime-agnostic output ingest."""
+
+    tool: str
+    content: str
+    persona: str | None = None
+    voice: str | None = None
+    mode: str | None = None
+    urgent: bool = False
+
+
+@router.post("/v1/hook/output")
+async def hook_output(req: HookOutputRequest) -> dict:
+    """Runtime-agnostic webhook. Any LLM tool can POST a response here to be spoken.
+
+    See :mod:`claudible.hooks.generic` for the processing pipeline (filter →
+    rephrase → speak). Returns a small status dict; never propagates speak
+    failures upstream.
+    """
+    from claudible.hooks.generic import process_output
+
+    return await process_output(
+        tool=req.tool,
+        content=req.content,
+        persona=req.persona,
+        voice=req.voice,
+        mode=req.mode,
+        urgent=req.urgent,
+    )
+
+
+# ── Backend adapter management ──────────────────────────────────────────────
+
+@router.get("/v1/hook/backends")
+async def list_hook_backends() -> dict:
+    """List available backend adapters and their current install status."""
+    from claudible.hooks.backends import ADAPTERS
+
+    out = []
+    for name, cls in ADAPTERS.items():
+        # Generic adapter is parameterized by command — skip status here.
+        if name == "generic":
+            out.append({
+                "name": name,
+                "label": cls.label,
+                "detected": False,
+                "installed": False,
+                "details": "parameterized; install with `claudible hook install generic <command>`",
+            })
+            continue
+        adapter = cls()
+        st = adapter.status()
+        out.append({
+            "name": st.name,
+            "label": cls.label,
+            "detected": st.detected,
+            "installed": st.installed,
+            "details": st.details,
+        })
+    return {"backends": out}

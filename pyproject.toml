@@ -37,8 +37,8 @@ dependencies = [
     "sounddevice>=0.5",
     "numpy>=1.26",
     # STT
-    "vosk>=0.3",  # legacy nerd-dictation backend
-    "faster-whisper>=1.1",  # whisper streaming backend
+    "vosk>=0.3 ; sys_platform == 'linux'",  # legacy nerd-dictation backend (Linux-only wheels)
+    "faster-whisper>=1.1",  # whisper streaming backend (cross-platform)
     "onnxruntime>=1.17",  # Silero VAD pre-filter
     # System tray
     "pystray>=0.19",
