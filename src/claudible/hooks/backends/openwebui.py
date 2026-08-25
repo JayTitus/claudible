@@ -11,11 +11,24 @@ The adapter emits the userscript into ``~/.config/claudible/openwebui/`` so
 the user can drop it into Tampermonkey / Violentmonkey / a custom function
 in their browser of choice. ``install`` is therefore a code generator;
 ``uninstall`` removes the generated artifacts.
+
+Scoping note
+------------
+The userscript is deliberately scoped to the OpenWebUI origin only. A
+userscript that matches ``*://*/*`` runs on every page the user visits, and
+because it listens for generic DOM events (``stream:end``) and holds
+``GM_xmlhttpRequest`` (which bypasses CORS), any site could otherwise
+dispatch a forged event and push attacker-controlled text into the local
+claudible daemon to be spoken aloud. Construct with
+``OpenWebUIAdapter("https://chat.example.com")`` for a remote instance;
+the default covers the common loopback install.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from claudible.hooks.backends.base import BackendAdapter, BackendStatus
 
@@ -24,10 +37,24 @@ log = logging.getLogger(__name__)
 ARTIFACT_DIR = Path.home() / ".config" / "claudible" / "openwebui"
 USERSCRIPT_NAME = "claudible-openwebui.user.js"
 
+#: Loopback-only default. Covers a self-hosted OpenWebUI on any local port
+#: without granting the script the whole web.
+DEFAULT_MATCHES = ("http://localhost:*/*", "http://127.0.0.1:*/*")
+DEFAULT_HOSTS = ("localhost", "127.0.0.1")
+
 
 class OpenWebUIAdapter(BackendAdapter):
+    """Adapter for OpenWebUI.
+
+    :param site: Origin of the OpenWebUI instance (e.g.
+        ``https://chat.example.com``). Omit for a loopback install.
+    """
+
     name = "openwebui"
     label = "OpenWebUI"
+
+    def __init__(self, site: str = "") -> None:
+        self.site = site.rstrip("/")
 
     def detect(self) -> bool:
         # No way to programmatically detect OpenWebUI; the user knows.
@@ -38,8 +65,11 @@ class OpenWebUIAdapter(BackendAdapter):
     def install(self, *, host: str, port: int, token: str | None = None) -> None:
         ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
         target = ARTIFACT_DIR / USERSCRIPT_NAME
-        target.write_text(_userscript(host=host, port=port, token=token))
-        target.chmod(0o644)
+        target.write_text(
+            _userscript(host=host, port=port, token=token, site=self.site)
+        )
+        # 0600, not 0644: the script embeds the bearer token when one is set.
+        target.chmod(0o600)
         log.info("Wrote OpenWebUI userscript to %s", target)
 
     def uninstall(self) -> None:
@@ -58,7 +88,26 @@ class OpenWebUIAdapter(BackendAdapter):
         )
 
 
-def _userscript(*, host: str, port: int, token: str | None) -> str:
+def _scope(site: str) -> tuple[str, list[str]]:
+    """Return the ``@match`` block and the runtime hostname allowlist.
+
+    Falls back to loopback-only when no site is configured. Never returns a
+    wildcard-host match.
+    """
+    if not site:
+        matches = "\n".join(f"// @match        {m}" for m in DEFAULT_MATCHES)
+        return matches, list(DEFAULT_HOSTS)
+
+    parts = urlsplit(site)
+    if not parts.scheme or not parts.hostname:
+        raise ValueError(
+            f"OpenWebUI site must be a full origin like https://chat.example.com, got {site!r}"
+        )
+    origin = f"{parts.scheme}://{parts.netloc}"
+    return f"// @match        {origin}/*", [parts.hostname]
+
+
+def _userscript(*, host: str, port: int, token: str | None, site: str = "") -> str:
     """Render a Tampermonkey-compatible userscript.
 
     The script hooks the OpenWebUI streaming completion event, accumulates the
@@ -66,25 +115,30 @@ def _userscript(*, host: str, port: int, token: str | None) -> str:
     finishes.
     """
     auth_header = f'"Authorization": "Bearer {token}",' if token else ""
+    match_block, allowed_hosts = _scope(site)
     return f"""// ==UserScript==
 // @name         Claudible — OpenWebUI bridge
 // @namespace    https://github.com/JayTitus/claudible
-// @version      0.1.0
+// @version      0.2.0
 // @description  Forward OpenWebUI assistant responses to the claudible TTS daemon.
-// @match        *://*/admin/*
-// @match        *://*/c/*
-// @match        *://localhost:*/*
-// @match        *://*/*
+{match_block}
 // @grant        GM_xmlhttpRequest
 // @connect      {host}
 // ==/UserScript==
 (function () {{
+  // Defence in depth: the match block already scopes us, but a manager
+  // misconfiguration shouldn't be enough to let an arbitrary origin drive
+  // the local daemon.
+  const ALLOWED_HOSTS = {json.dumps(allowed_hosts)};
+  if (!ALLOWED_HOSTS.includes(location.hostname)) return;
+
   const ENDPOINT = "http://{host}:{port}/api/v1/hook/output";
   const TOOL = "openwebui";
+  const MAX_CHARS = 20000;
 
   function fire(text) {{
-    if (!text || !text.trim()) return;
-    const body = JSON.stringify({{ tool: TOOL, content: text }});
+    if (typeof text !== "string" || !text.trim()) return;
+    const body = JSON.stringify({{ tool: TOOL, content: text.slice(0, MAX_CHARS) }});
     GM_xmlhttpRequest({{
       method: "POST",
       url: ENDPOINT,
